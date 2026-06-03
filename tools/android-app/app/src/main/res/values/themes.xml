@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.LeapsCsv" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/blue_700</item>
+        <item name="android:colorBackground">@color/gray_100</item>
+        <item name="android:textColor">@color/gray_900</item>
+    </style>
+</resources>
