@@ -1,7 +1,7 @@
 /*
  * ranging.h - Shared types and constants for initiator and responder
  *
- * Minimal DS-TWR protocol between two DW3000 modules.
+ * Fixed SS-TWR protocol between two DW3000 modules.
  *
  * SDK-defined constants (SPEED_OF_LIGHT, UUS_TO_DWT_TIME, FCS_LEN, etc.)
  * are provided by <shared_defines.h> and <deca_device_api.h>.
@@ -59,12 +59,7 @@ void ranging_msg_get_ts(const uint8_t *ts_field, uint32_t *ts);
 /* -- Period between two measurements (ms) -- */
 #define RNG_DELAY_MS 1
 
-/* -- Runtime test profiles (non-PHY, safe for live switching) -- */
-#define UWB_TEST_PROFILE_FAST_DISTANCE_ONLY  0u
-#define UWB_TEST_PROFILE_FAST_ACCEL_DECIMATED 1u
-#define UWB_TEST_PROFILE_STABLE_FULL         2u
-#define UWB_TEST_PROFILE_ROBUST_DETECTION    3u
-#define UWB_TEST_PROFILE_DIAGNOSTICS_FULL    4u
+/* -- Fixed runtime profile -- */
 #define UWB_TEST_PROFILE_TURBO_DISTANCE_ONLY 5u
 #define UWB_TEST_PROFILE_DEFAULT UWB_TEST_PROFILE_TURBO_DISTANCE_ONLY
 

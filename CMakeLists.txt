@@ -1,56 +1,53 @@
 #
-# CMakeLists.txt — UWB Ranging Minimal (DS-TWR)
+# CMakeLists.txt - UWB Ranging Minimal (SS-TWR)
 #
-# Ce projet s'intègre dans le build system du SDK Qorvo.
-# Il réutilise le driver UWB, le BSP nRF, et les configs UWB
-# du SDK, mais remplace les exemples par notre propre code.
+# This project integrates with the Qorvo SDK build system.
+# It reuses the UWB driver, the nRF BSP, and SDK UWB configs,
+# but replaces the SDK examples with this project's code.
 #
 # Target : DWM3001CDK (nRF52833 + DW3000)
 #
-# COMMENT ÇA MARCHE :
+# HOW IT WORKS:
 #
-#   Le SDK Qorvo a cette structure de build :
+#   The Qorvo SDK has this build structure:
 #
-#     Drivers/CMakeLists.txt          ← Top-level, crée le projet
-#       ├── cmake/config.cmake        ← Variables (driver DW3000/DW3720)
-#       ├── cmake/arm-none-eabi-gcc.cmake ← Toolchain ARM cross-compile
-#       ├── API/Shared/dwt_uwb_driver ← Librairie driver UWB (compilée en .a)
+#     Drivers/CMakeLists.txt              <- top-level project
+#       |-- cmake/config.cmake            <- DW3000/DW3720 driver variables
+#       |-- cmake/arm-none-eabi-gcc.cmake <- ARM cross-compile toolchain
+#       |-- API/Shared/dwt_uwb_driver     <- UWB driver library
 #       └── API/Build_Platforms/nRF52840-DK/
-#           ├── CMakeLists.txt        ← Sources platform (SPI, GPIO, etc.)
-#           ├── Source/main.c         ← Point d'entrée (appelle example_pointer)
-#           ├── Source/platform/      ← HAL nRF52840 (SPI, sleep, mutex...)
-#           ├── sdk/                  ← Nordic SDK (drivers nRF52840)
-#           ├── Setup/               ← Linker script
-#           ├── Startup/             ← Code démarrage ARM (reset handler)
-#           └── lib/                 ← RTT, chelpers, qio, qosal
+#           |-- CMakeLists.txt            <- platform sources (SPI, GPIO, etc.)
+#           |-- Source/main.c             <- SDK example entrypoint
+#           |-- Source/platform/          <- nRF52840 HAL (SPI, sleep, mutex...)
+#           |-- sdk/                      <- Nordic SDK drivers
+#           |-- Setup/                    <- linker script template
+#           |-- Startup/                  <- ARM startup code
+#           └── lib/                      <- RTT, chelpers, qio, qosal
 #
-#   Notre projet ne modifie RIEN dans le SDK. On ajoute juste nos .c
-#   comme sources supplémentaires et on remplace le example_selection.h
-#   par notre propre sélection.
+#   This project does not modify SDK files. It adds project sources and
+#   supplies its own application entrypoint.
 #
-# UTILISATION :
+# USAGE:
 #
-#   # Depuis ce dossier (uwb-ranging/)
+#   # From this repository root:
 #   cmake --preset=initiator_debug
 #   cmake --build --preset initiator_debug
 #
-#   # Ou pour le responder :
+#   # Or for the responder:
 #   cmake --preset=responder_debug
 #   cmake --build --preset responder_debug
 #
 
 cmake_minimum_required(VERSION 3.20)
 
-# ── Chemin vers le SDK Qorvo ──
-# ── SDK vendorisé dans vendor/sdk/ ──
-# Toutes les dépendances SDK (driver UWB, Nordic nRF5 SDK, HAL platform)
-# sont incluses dans le repo. Pas besoin de télécharger le SDK séparément.
+# Qorvo SDK path. The SDK is vendored under vendor/sdk.
+# All SDK dependencies are included in this repository.
 set(QORVO_SDK_PATH "${CMAKE_SOURCE_DIR}/vendor/sdk" CACHE PATH "Path to vendored SDK")
 
-# ── Toolchain ARM (depuis le SDK) ──
+# ARM toolchain from the SDK.
 set(CMAKE_TOOLCHAIN_FILE "${QORVO_SDK_PATH}/cmake/arm-none-eabi-gcc.cmake" CACHE STRING "Toolchain")
 
-# ── Projet ──
+# Project.
 project(uwb_ranging VERSION 1.0.0 LANGUAGES C ASM)
 
 message("=== UWB Ranging Minimal ===")
@@ -58,32 +55,32 @@ message("SDK path: ${QORVO_SDK_PATH}")
 message("Build type: ${CMAKE_BUILD_TYPE}")
 message("Role: ${UWB_ROLE}")
 
-# ── Validation du rôle (initiator ou responder) ──
+# Validate role selection.
 if(NOT DEFINED UWB_ROLE)
-    message(FATAL_ERROR "UWB_ROLE non défini. Utilise un preset ou -DUWB_ROLE=initiator|responder")
+    message(FATAL_ERROR "UWB_ROLE is not defined. Use a preset or -DUWB_ROLE=initiator|responder")
 endif()
 if(NOT UWB_ROLE STREQUAL "initiator" AND NOT UWB_ROLE STREQUAL "responder")
-    message(FATAL_ERROR "UWB_ROLE doit être 'initiator' ou 'responder' (reçu: ${UWB_ROLE})")
+    message(FATAL_ERROR "UWB_ROLE must be 'initiator' or 'responder' (received: ${UWB_ROLE})")
 endif()
 
-# ── Memory layout nRF52833 (DWM3001CDK) ──
-# Override AVANT include(config.cmake) qui définit les défauts nRF52840
+# nRF52833 memory layout for DWM3001CDK.
+# Override before include(config.cmake), which defines nRF52840 defaults.
 set(FLASH_SIZE 0x00080000 CACHE STRING "Flash size" FORCE)   # 512KB
 set(RAM_SIZE   0x00020000 CACHE STRING "Ram size" FORCE)      # 128KB
 
-# ── Inclure la config du SDK ──
+# Include SDK CMake helpers.
 include("${QORVO_SDK_PATH}/cmake/config.cmake")
 include("${QORVO_SDK_PATH}/cmake/util.cmake")
 
-# ── Paths SDK ──
+# SDK paths.
 set(UWB_DRIVER_PATH "${QORVO_SDK_PATH}/API/Shared/dwt_uwb_driver")
 set(PLATFORM_PATH "${QORVO_SDK_PATH}/API/Build_Platforms/nRF52840-DK")
 set(EXAMPLES_PATH "${QORVO_SDK_PATH}/API/Src")
 
-# Variable attendue par les CMakeLists.txt internes du SDK
+# Variable expected by internal SDK CMakeLists files.
 set(PLATFORM_SPECIFIC_FILES_PATH "${PLATFORM_PATH}" CACHE STRING "" FORCE)
 
-# Linker script (template nRF, configuré avec les tailles nRF52833)
+# Linker script generated from the SDK template with nRF52833 sizes.
 set(LINKER_SCRIPT_IN "${PLATFORM_PATH}/Setup/nrf52840_linker.ld.in")
 set(LINKER_SCRIPT_OUT "${CMAKE_BINARY_DIR}/nrf52833_linker.ld")
 configure_file(${LINKER_SCRIPT_IN} ${LINKER_SCRIPT_OUT} @ONLY)
@@ -91,14 +88,14 @@ configure_file(${LINKER_SCRIPT_IN} ${LINKER_SCRIPT_OUT} @ONLY)
 set(CMAKE_EXE_LINKER_FLAGS
     "${CMAKE_EXE_LINKER_FLAGS} -T ${LINKER_SCRIPT_OUT} -nostartfiles")
 
-# ── Compiler le driver UWB ──
-# Note: Le SDK a un faux positif -Wmaybe-uninitialized avec GCC 15
-# On ne peut pas modifier le code SDK, on supprime juste ce warning pour le driver
+# Build the UWB driver.
+# The SDK has a GCC 15 -Wmaybe-uninitialized false positive; keep the
+# suppression scoped to the vendored driver targets.
 set(DWT_DW3000 ${USE_DRV_DW3000})
 set(DWT_DW3720 ${USE_DRV_DW3720})
 add_subdirectory(${UWB_DRIVER_PATH} ${CMAKE_BINARY_DIR}/uwb_driver)
 
-# Supprimer le warning faux positif dans le code SDK qu'on ne contrôle pas
+# Suppress the SDK false positive in code controlled by the vendor.
 if(TARGET dw3000_uwb_driver)
     target_compile_options(dw3000_uwb_driver PRIVATE -Wno-maybe-uninitialized)
 endif()
@@ -106,13 +103,13 @@ if(TARGET dw3720_uwb_driver)
     target_compile_options(dw3720_uwb_driver PRIVATE -Wno-maybe-uninitialized)
 endif()
 
-# ── Compiler les libs platform ──
+# Build platform libraries.
 add_subdirectory(${PLATFORM_PATH}/lib/chelpers ${CMAKE_BINARY_DIR}/chelpers)
 add_subdirectory(${PLATFORM_PATH}/lib/rtt ${CMAKE_BINARY_DIR}/rtt)
 add_subdirectory(${PLATFORM_PATH}/lib/qio ${CMAKE_BINARY_DIR}/qio)
 add_subdirectory(${PLATFORM_PATH}/lib/qosal ${CMAKE_BINARY_DIR}/qosal)
 
-# ── Startup nRF52833 (on ne peut pas utiliser nrf52840_startup du SDK) ──
+# nRF52833 startup; the SDK nRF52840 startup is not suitable for this board.
 set(STARTUP_PATH "${PLATFORM_PATH}/Startup")
 add_library(nrf52833_startup STATIC EXCLUDE_FROM_ALL
     ${PLATFORM_PATH}/sdk/modules/nrfx/mdk/ses_startup_nrf52833.s
@@ -129,11 +126,11 @@ set_source_files_properties(
     PROPERTIES COMPILE_FLAGS "-x assembler-with-cpp -DINITIALIZE_STACK=1"
 )
 
-# ── Nom de l'exécutable ──
+# Output names.
 set(TARGET_ELF uwb_${UWB_ROLE}.elf)
 set(TARGET_HEX uwb_${UWB_ROLE}.hex)
 
-# ── Sources ──
+# Sources.
 # Sources platform — custom DWM3001CDK (single DW3000, no SPI2/IRQ2)
 set(PLATFORM_SOURCES
     ${PLATFORM_PATH}/Source/platform/deca_mutex.c
@@ -161,20 +158,20 @@ set(PLATFORM_SOURCES
     ${PLATFORM_PATH}/sdk/components/libraries/strerror/nrf_strerror.c
 )
 
-# Sources du SDK Qorvo nécessaires (config UWB, shared functions)
+# Required Qorvo SDK sources.
 set(SDK_SOURCES
     ${EXAMPLES_PATH}/config_options.c
     ${EXAMPLES_PATH}/examples/shared_data/shared_functions.c
 )
 
-# Notre code
+# Project sources.
 set(PROJECT_SOURCES
     ${CMAKE_SOURCE_DIR}/src/common/ranging.c
     ${CMAKE_SOURCE_DIR}/src/common/radio_quality.c
     ${CMAKE_SOURCE_DIR}/src/common/uwb_profiles.c
 )
 
-# Sélection initiator ou responder
+# Select initiator or responder application source.
 if(UWB_ROLE STREQUAL "initiator")
     list(APPEND PROJECT_SOURCES
         ${CMAKE_SOURCE_DIR}/src/initiator/main_initiator.c
@@ -189,14 +186,14 @@ elseif(UWB_ROLE STREQUAL "responder")
     )
 endif()
 
-# main.c custom (point d'entrée)
+# Custom application entrypoint.
 list(APPEND PROJECT_SOURCES
     ${CMAKE_SOURCE_DIR}/src/main.c
 )
 
-# ── Includes ──
+# Include directories.
 set(INCLUDE_DIRS
-    # Notre code
+    # Project code
     ${CMAKE_SOURCE_DIR}/src/board
     ${CMAKE_SOURCE_DIR}/src/common
     ${CMAKE_SOURCE_DIR}/src/accel
@@ -227,13 +224,13 @@ set(INCLUDE_DIRS
     ${PLATFORM_PATH}/sdk/external/fprintf
     ${PLATFORM_PATH}/sdk/modules/nrfx/mdk
 
-    # SDK exemples (pour config_options.h, shared_defines.h, etc.)
+    # SDK examples headers for config_options.h, shared_defines.h, etc.
     ${EXAMPLES_PATH}/
     ${EXAMPLES_PATH}/examples/shared_data
     ${EXAMPLES_PATH}/examples/examples_info
 )
 
-# ── Créer l'exécutable ──
+# Create executable.
 add_executable(${TARGET_ELF}
     ${PLATFORM_SOURCES}
     ${SDK_SOURCES}
@@ -263,9 +260,9 @@ target_compile_definitions(${TARGET_ELF} PRIVATE
     NB_DW_DRIVERS=2
     NRF_LOG_BACKEND_RTT_ENABLED=$<IF:$<CONFIG:Debug>,1,0>
     NRF_LOG_ENABLED=$<IF:$<CONFIG:Debug>,1,0>
-    # Config UWB : Option 35 = Channel 5, PRF 64M, Preamble 128, 6.8Mbps, STS 64
+    # UWB config: option 35 = channel 5, PRF 64M, preamble 128, 6.8 Mbps, STS 64.
     CMAKE_UWB_CONFIG_OPTION=35
-    # Sélection du rôle pour main.c
+    # Role selection for main.c.
     $<$<STREQUAL:${UWB_ROLE},initiator>:UWB_ROLE_INITIATOR>
     $<$<STREQUAL:${UWB_ROLE},responder>:UWB_ROLE_RESPONDER>
 )
@@ -278,7 +275,7 @@ set_target_properties(${TARGET_ELF} PROPERTIES
     LINK_DEPENDS ${LINKER_SCRIPT_OUT}
 )
 
-# ── Générer le .hex (flashable) ──
+# Generate flashable hex.
 add_custom_command(TARGET ${TARGET_ELF} POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${TARGET_ELF}> ${TARGET_HEX}
     COMMENT "Generating ${TARGET_HEX}"

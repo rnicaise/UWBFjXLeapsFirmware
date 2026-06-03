@@ -2,7 +2,8 @@
  * accel.h - LIS2DH12 accelerometer driver (minimal, blocking)
  *
  * The DWM3001C module integrates a LIS2DH12 on an internal I2C bus.
- * This driver uses nRF52833 TWIM0 directly (no nrf_twi SDK dependency).
+ * This driver uses nRF52833 TWIM1 directly (no nrf_twi SDK dependency), keeping
+ * UARTE0 free for USB serial logging.
  */
 
 #ifndef ACCEL_H

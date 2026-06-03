@@ -31,11 +31,11 @@ void test_run_info(unsigned char *data)
 
 /* Ranging function - defined in main_initiator.c or main_responder.c */
 #if defined(UWB_ROLE_INITIATOR)
-extern int ds_twr_initiator_custom(void);
-#define RANGING_ENTRY ds_twr_initiator_custom
+extern int ss_twr_initiator_custom(void);
+#define RANGING_ENTRY ss_twr_initiator_custom
 #elif defined(UWB_ROLE_RESPONDER)
-extern int ds_twr_responder_custom(void);
-#define RANGING_ENTRY ds_twr_responder_custom
+extern int ss_twr_responder_custom(void);
+#define RANGING_ENTRY ss_twr_responder_custom
 #else
 #error "Define UWB_ROLE_INITIATOR or UWB_ROLE_RESPONDER"
 #endif

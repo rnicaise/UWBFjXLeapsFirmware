@@ -1,5 +1,5 @@
 /*
- * main_responder.c — Module B (Responder) DS-TWR
+ * main_responder.c - Module B (Responder) SS-TWR
  */
 
 #include "deca_probe_interface.h"
@@ -107,7 +107,7 @@ static bool period_after_final = false;
 
 static uint8_t last_initiator_acq_period_ms = RNG_DELAY_MS;
 static uint8_t last_initiator_profile_opt = UWB_PROFILE_OPT_6M8_STABLE;
-static uint8_t current_test_profile = UWB_TEST_PROFILE_FAST_ACCEL_DECIMATED;
+static uint8_t current_test_profile = UWB_TEST_PROFILE_DEFAULT;
 static uint8_t last_initiator_test_profile = UWB_TEST_PROFILE_DEFAULT;
 static uint32_t responder_accel_sample_count = 0;
 
@@ -115,12 +115,6 @@ static const uwb_runtime_profile_t *active_profile = NULL;
 
 static char output_buf[320];
 static char cmd_buf[96];
-
-typedef enum
-{
-    RANGING_MODE_DS_TWR = 0,
-    RANGING_MODE_SS_TWR = 1,
-} ranging_mode_t;
 
 extern dwt_config_t config_options;
 extern dwt_txconfig_t txconfig_options;
@@ -142,36 +136,13 @@ static bool is_supported_acq_period(uint8_t period_ms)
 
 static bool is_supported_test_profile(uint8_t profile)
 {
-    return (profile == UWB_TEST_PROFILE_FAST_DISTANCE_ONLY) ||
-           (profile == UWB_TEST_PROFILE_TURBO_DISTANCE_ONLY);
+    return profile == UWB_TEST_PROFILE_TURBO_DISTANCE_ONLY;
 }
 
 static uint8_t test_profile_accel_decimation(uint8_t profile)
 {
     (void)profile;
-    return 1u;
-}
-
-static void write_accel_exchange_csv(uint32_t ms,
-                                     uint32_t sample,
-                                     int16_t iax,
-                                     int16_t iay,
-                                     int16_t iaz,
-                                     int16_t rax,
-                                     int16_t ray,
-                                     int16_t raz)
-{
-    snprintf(output_buf, sizeof(output_buf),
-             "%lu,%lu,%d,%d,%d,%d,%d,%d",
-             (unsigned long)ms,
-             (unsigned long)sample,
-             (int)iax,
-             (int)iay,
-             (int)iaz,
-             (int)rax,
-             (int)ray,
-             (int)raz);
-    uart_log_write(output_buf);
+    return 0u;
 }
 
 static int apply_profile_option(uint8_t opt)
@@ -209,151 +180,6 @@ static int apply_profile_option(uint8_t opt)
     return DWT_SUCCESS;
 }
 
-static bool parse_rate_command(const char *cmd, uint8_t *target_opt)
-{
-    const char *prefix = "CFG,UWB_DATARATE_KBPS=";
-    size_t prefix_len = strlen(prefix);
-    int rate;
-    uint8_t current_channel;
-
-    if ((cmd == NULL) || (target_opt == NULL))
-    {
-        return false;
-    }
-
-    if (strncmp(cmd, prefix, prefix_len) != 0)
-    {
-        return false;
-    }
-
-    rate = atoi(cmd + prefix_len);
-    current_channel = uwb_profile_channel_for_opt(current_profile_opt);
-    if (rate <= 850)
-    {
-        *target_opt = uwb_profile_opt_for_channel_rate_kbps(current_channel, rate);
-        return true;
-    }
-    if (rate >= 6800)
-    {
-        *target_opt = uwb_profile_opt_for_channel_rate_kbps(current_channel, rate);
-        return true;
-    }
-
-    return false;
-}
-
-static bool parse_channel_command(const char *cmd, uint8_t *channel)
-{
-    const char *prefix = "CFG,UWB_CHANNEL=";
-    size_t prefix_len = strlen(prefix);
-    int requested_channel;
-
-    if ((cmd == NULL) || (channel == NULL))
-    {
-        return false;
-    }
-
-    if (strncmp(cmd, prefix, prefix_len) != 0)
-    {
-        return false;
-    }
-
-    requested_channel = atoi(cmd + prefix_len);
-    if ((requested_channel != 5) && (requested_channel != 9))
-    {
-        return false;
-    }
-
-    *channel = (uint8_t)requested_channel;
-    return true;
-}
-
-static bool parse_acq_period_command(const char *cmd, uint8_t *period_ms)
-{
-    const char *prefix = "CFG,ACQ_PERIOD_MS=";
-    size_t prefix_len = strlen(prefix);
-    int period;
-
-    if ((cmd == NULL) || (period_ms == NULL))
-    {
-        return false;
-    }
-
-    if (strncmp(cmd, prefix, prefix_len) != 0)
-    {
-        return false;
-    }
-
-    period = atoi(cmd + prefix_len);
-    if ((period < 1) || (period > 200))
-    {
-        return false;
-    }
-
-    *period_ms = (uint8_t)period;
-    return true;
-}
-
-static bool parse_ranging_mode_command(const char *cmd, ranging_mode_t *mode)
-{
-    const char *prefix = "CFG,RANGING_MODE=";
-    size_t prefix_len = strlen(prefix);
-
-    if ((cmd == NULL) || (mode == NULL))
-    {
-        return false;
-    }
-
-    if (strncmp(cmd, prefix, prefix_len) != 0)
-    {
-        return false;
-    }
-
-    if (strcmp(cmd + prefix_len, "DS_TWR") == 0)
-    {
-        *mode = RANGING_MODE_DS_TWR;
-        return true;
-    }
-
-    if (strcmp(cmd + prefix_len, "SS_TWR") == 0)
-    {
-        *mode = RANGING_MODE_SS_TWR;
-        return true;
-    }
-
-    return false;
-}
-
-static bool parse_test_profile_command(const char *cmd, uint8_t *profile)
-{
-    const char *prefix = "CFG,TEST_PROFILE=";
-    size_t prefix_len = strlen(prefix);
-    const char *name;
-
-    if ((cmd == NULL) || (profile == NULL))
-    {
-        return false;
-    }
-
-    if (strncmp(cmd, prefix, prefix_len) != 0)
-    {
-        return false;
-    }
-
-    name = cmd + prefix_len;
-    if (strcmp(name, "TURBO_DISTANCE_ONLY") == 0)
-    {
-        *profile = UWB_TEST_PROFILE_TURBO_DISTANCE_ONLY;
-        return true;
-    }
-    if (strcmp(name, "FAST_DISTANCE_ONLY") == 0)
-    {
-        *profile = UWB_TEST_PROFILE_FAST_DISTANCE_ONLY;
-        return true;
-    }
-    return false;
-}
-
 static void process_app_commands(void)
 {
     uart_log_poll_rx();
@@ -365,57 +191,16 @@ static void process_app_commands(void)
 
 static void handle_app_command(const char *cmd)
 {
-    uint8_t requested_opt;
-    uint8_t requested_channel;
-    uint8_t requested_period;
-    uint8_t requested_test_profile;
-    ranging_mode_t requested_mode;
-
     if ((strcmp(cmd, "CFG,GET_ROLE") == 0) || (strcmp(cmd, "INFO?") == 0))
     {
         uart_log_write("ROLE,RESPONDER");
         return;
     }
 
-    if (parse_test_profile_command(cmd, &requested_test_profile))
-    {
-        (void)requested_test_profile;
-        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
-        return;
-    }
-
-    if (parse_channel_command(cmd, &requested_channel))
-    {
-        (void)requested_channel;
-        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
-        return;
-    }
-
-    if (parse_rate_command(cmd, &requested_opt))
-    {
-        (void)requested_opt;
-        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
-        return;
-    }
-
-    if (parse_acq_period_command(cmd, &requested_period))
-    {
-        (void)requested_period;
-        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
-        return;
-    }
-
-    if (parse_ranging_mode_command(cmd, &requested_mode))
-    {
-        (void)requested_mode;
-        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
-        return;
-    }
-
-    uart_log_write("ERR,UNKNOWN_CMD");
+    uart_log_write("ERR,READ_ONLY_SS_TWR");
 }
 
-int ds_twr_responder_custom(void)
+int ss_twr_responder_custom(void)
 {
     test_run_info((unsigned char *)"UWB RANGING RESP v1.0");
     uart_log_init();
@@ -479,8 +264,8 @@ int ds_twr_responder_custom(void)
     NRF_RTC2->PRESCALER = 0;
     NRF_RTC2->TASKS_START = 1;
 
-    test_run_info((unsigned char *)"# ms,sample,iax,iay,iaz,rax,ray,raz");
-    uart_log_write("# ms,sample,iax,iay,iaz,rax,ray,raz");
+    test_run_info((unsigned char *)"# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt");
+    uart_log_write("# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt");
 
     while (1)
     {
@@ -521,24 +306,6 @@ int ds_twr_responder_custom(void)
                               (rx_buffer[POLL_MSG_ACCEL_Y_IDX + 1] << 8));
                 accel_rx[2] = (int16_t)(rx_buffer[POLL_MSG_ACCEL_Z_IDX] |
                               (rx_buffer[POLL_MSG_ACCEL_Z_IDX + 1] << 8));
-
-                if (!accel_ok)
-                {
-                    accel_ok = accel_init();
-                }
-                if (accel_ok)
-                {
-                    if (!accel_read(&accel_local))
-                    {
-                        accel_ok = false;
-                    }
-                }
-                else
-                {
-                    accel_local.x = 0;
-                    accel_local.y = 0;
-                    accel_local.z = 0;
-                }
 
                 if (frame_len > POLL_MSG_ACQ_PERIOD_IDX)
                 {
@@ -627,19 +394,6 @@ int ds_twr_responder_custom(void)
                 waitforsysstatus(NULL, NULL, DWT_INT_TXFRS_BIT_MASK, 0);
                 dwt_writesysstatuslo(DWT_INT_TXFRS_BIT_MASK);
                 frame_seq_nb++;
-                ranging_count++;
-
-                {
-                    uint32_t ms = (uint32_t)(((uint64_t)NRF_RTC2->COUNTER * 1000u) / 32768u);
-                    write_accel_exchange_csv(ms,
-                                             ranging_count,
-                                             accel_rx[0],
-                                             accel_rx[1],
-                                             accel_rx[2],
-                                             accel_local.x,
-                                             accel_local.y,
-                                             accel_local.z);
-                }
 
                 if (switch_after_final)
                 {
@@ -715,69 +469,19 @@ int ds_twr_responder_custom(void)
                             radio_quality_t radio_quality;
                             radio_quality_read(&radio_quality);
 
-                            if ((current_test_profile == UWB_TEST_PROFILE_FAST_DISTANCE_ONLY) ||
-                                (current_test_profile == UWB_TEST_PROFILE_TURBO_DISTANCE_ONLY))
-                            {
-                                snprintf(output_buf, sizeof(output_buf),
-                                "%lu,%lu,%.2f,%.1f,%.1f,%.2f,%u,%u,%.2f,%u,%d",
-                                (unsigned long)ms,
-                                (unsigned long)ranging_count,
-                                distance,
-                                (double)radio_quality.rx_power_dbm,
-                                (double)radio_quality.fp_power_dbm,
-                                (double)radio_quality.clock_offset_ppm,
-                                (unsigned int)radio_quality.score_10,
-                                (unsigned int)radio_quality.nlos_score_10,
-                                (double)radio_quality.peak_to_fp_samples,
-                                (unsigned int)radio_quality.fp_conf_level,
-                                (int)radio_quality.sts_quality);
-                            }
-                            else if (current_test_profile == UWB_TEST_PROFILE_DIAGNOSTICS_FULL)
-                            {
-                                snprintf(output_buf, sizeof(output_buf),
-                                "%lu,%lu,%.2f,%.1f,%.1f,%.2f,%u,%u,%.2f,%u,%d,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u",
-                                (unsigned long)ms,
-                                (unsigned long)ranging_count,
-                                distance,
-                                (double)radio_quality.rx_power_dbm,
-                                (double)radio_quality.fp_power_dbm,
-                                (double)radio_quality.clock_offset_ppm,
-                                (unsigned int)radio_quality.score_10,
-                                (unsigned int)radio_quality.nlos_score_10,
-                                (double)radio_quality.peak_to_fp_samples,
-                                (unsigned int)radio_quality.fp_conf_level,
-                                (int)radio_quality.sts_quality,
-                                (int)accel_rx[0], (int)accel_rx[1], (int)accel_rx[2],
-                                (int)accel_local.x, (int)accel_local.y, (int)accel_local.z,
-                                (unsigned int)current_acq_period_ms,
-                                (unsigned int)last_initiator_acq_period_ms,
-                                (unsigned int)current_profile_opt,
-                                (unsigned int)last_initiator_profile_opt,
-                                (unsigned int)current_test_profile,
-                                (unsigned int)last_initiator_test_profile);
-                            }
-                            else
-                            {
-                                snprintf(output_buf, sizeof(output_buf),
-                                "%lu,%lu,%.2f,%.1f,%.1f,%.2f,%u,%u,%.2f,%u,%d,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u",
-                                (unsigned long)ms,
-                                (unsigned long)ranging_count,
-                                distance,
-                                (double)radio_quality.rx_power_dbm,
-                                (double)radio_quality.fp_power_dbm,
-                                (double)radio_quality.clock_offset_ppm,
-                                (unsigned int)radio_quality.score_10,
-                                (unsigned int)radio_quality.nlos_score_10,
-                                (double)radio_quality.peak_to_fp_samples,
-                                (unsigned int)radio_quality.fp_conf_level,
-                                (int)radio_quality.sts_quality,
-                                (int)accel_rx[0], (int)accel_rx[1], (int)accel_rx[2],
-                                (int)accel_local.x, (int)accel_local.y, (int)accel_local.z,
-                                (unsigned int)current_acq_period_ms,
-                                (unsigned int)last_initiator_acq_period_ms,
-                                (unsigned int)current_profile_opt,
-                                (unsigned int)last_initiator_profile_opt);
-                            }
+                            snprintf(output_buf, sizeof(output_buf),
+                            "%lu,%lu,%.2f,%.1f,%.1f,%.2f,%u,%u,%.2f,%u,%d",
+                            (unsigned long)ms,
+                            (unsigned long)ranging_count,
+                            distance,
+                            (double)radio_quality.rx_power_dbm,
+                            (double)radio_quality.fp_power_dbm,
+                            (double)radio_quality.clock_offset_ppm,
+                            (unsigned int)radio_quality.score_10,
+                            (unsigned int)radio_quality.nlos_score_10,
+                            (double)radio_quality.peak_to_fp_samples,
+                            (unsigned int)radio_quality.fp_conf_level,
+                            (int)radio_quality.sts_quality);
                         }
                         uart_log_write(output_buf);
 

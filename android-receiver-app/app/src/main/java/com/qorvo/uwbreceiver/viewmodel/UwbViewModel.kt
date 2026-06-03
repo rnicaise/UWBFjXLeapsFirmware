@@ -7,16 +7,19 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.qorvo.uwbreceiver.data.RuntimeStore
+import com.qorvo.uwbreceiver.data.SettingsStore
 import com.qorvo.uwbreceiver.data.UwbUiState
 import com.qorvo.uwbreceiver.service.UwbForegroundService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 class UwbViewModel(app: Application) : AndroidViewModel(app) {
+    private val settingsStore = SettingsStore(app)
     private val shareRequests = MutableStateFlow<Uri?>(null)
 
     private val ticker = flow {
@@ -28,12 +31,18 @@ class UwbViewModel(app: Application) : AndroidViewModel(app) {
 
     val uiState = combine(
         RuntimeStore.state,
+        settingsStore.thresholds,
+        settingsStore.controls,
+        settingsStore.experiment,
         ticker,
-    ) { runtime, _ ->
+    ) { runtime, thresholds, controls, experiment, _ ->
         val nowElapsed = android.os.SystemClock.elapsedRealtime()
         val elapsed = runtime.sessionStartElapsedMs?.let { (nowElapsed - it) / 1000 } ?: 0
         UwbUiState(
             runtime = runtime,
+            thresholds = thresholds,
+            controls = controls,
+            experiment = experiment,
             elapsedSec = elapsed,
         )
     }.stateIn(
@@ -62,6 +71,30 @@ class UwbViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopRecording() {
         sendServiceAction(UwbForegroundService.ACTION_STOP_RECORDING)
+    }
+
+    fun updateGreenMax(value: Float) {
+        viewModelScope.launch {
+            settingsStore.updateGreenMax(value)
+        }
+    }
+
+    fun updateOrangeMax(value: Float) {
+        viewModelScope.launch {
+            settingsStore.updateOrangeMax(value)
+        }
+    }
+
+    fun updateBikeBoxPosition(value: Int) {
+        viewModelScope.launch {
+            settingsStore.updateBikeBoxPosition(value)
+        }
+    }
+
+    fun updateVestBoxPosition(value: Int) {
+        viewModelScope.launch {
+            settingsStore.updateVestBoxPosition(value)
+        }
     }
 
     fun requestShare(uri: Uri?) {

@@ -1,14 +1,15 @@
 /*
- * accel.c - LIS2DH12 driver via TWIM0 (minimal, blocking, no SDK TWI)
+ * accel.c - LIS2DH12 driver via TWIM1 (minimal, blocking, no SDK TWI)
  *
- * Uses nRF52833 TWIM0 registers directly.
+ * Uses nRF52833 TWIM1 registers directly.
  * No dependency on nrf_twi_sensor / nrf_drv_twi.
  *
  * Internal I2C pins on DWM3001C module:
  *   SDA = P0.16   SCL = P0.13   (validated via WHO_AM_I at boot)
  *
- * NOTE: TWIM0 and SPIM0/SPIS0/TWIS0 share the same peripheral block
- * (0x40003000). SPIM0 is disabled before enabling TWIM0.
+ * NOTE: TWIM0 shares a peripheral block with UARTE0 on nRF52.
+ * The firmware uses UARTE0 for USB serial logging, so the accelerometer must
+ * use TWIM1 to keep UART output alive.
  */
 
 #include "accel.h"
@@ -32,8 +33,8 @@
 #define LIS2DH12_CTRL_REG4      0x23
 #define LIS2DH12_OUT_X_L        0x28
 
-/* ── TWIM0 instance ── */
-#define TWI  NRF_TWIM0
+/* ── TWIM1 instance ── */
+#define TWI  NRF_TWIM1
 
 /* ── Timeout for TWI operations (~10ms at 64MHz) ── */
 #define TWI_TIMEOUT  640000
@@ -42,9 +43,10 @@
 
 static void twim_init(void)
 {
-    /* Disable SPIM0 which shares the same peripheral block as TWIM0 */
-    NRF_SPIM0->ENABLE = 0;
-    NRF_SPI0->ENABLE  = 0;
+    /* Disable alternate functions sharing the same peripheral block as TWIM1. */
+    NRF_UARTE1->ENABLE = 0;
+    NRF_SPIM1->ENABLE = 0;
+    NRF_SPI1->ENABLE  = 0;
 
     /* Configure GPIO for I2C */
     nrf_gpio_cfg(ACC_SCL_PIN,
@@ -61,7 +63,7 @@ static void twim_init(void)
         NRF_GPIO_PIN_S0D1,
         NRF_GPIO_PIN_NOSENSE);
 
-    /* Configure TWIM0 */
+    /* Configure TWIM1 */
     TWI->PSEL.SCL = ACC_SCL_PIN;
     TWI->PSEL.SDA = ACC_SDA_PIN;
     TWI->ADDRESS  = LIS2DH12_ADDR_HIGH;  /* will try LOW if WHO_AM_I fails */
