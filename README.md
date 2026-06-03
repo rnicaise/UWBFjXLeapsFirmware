@@ -18,7 +18,7 @@ Current production-oriented behavior:
 Important note:
 
 - `uwb_profiles.c` still contains legacy profile definitions that were useful during testing.
-- The delivered firmware and Android app use the fixed high-rate SS-TWR path: channel 5, 6.8 Mbps, `ms,sample,dist`.
+- The delivered firmware and Android app use the fixed high-rate SS-TWR path: channel 5, 6.8 Mbps, `ms,sample,dist,iax,iay,iaz,rax,ray,raz`.
 - Runtime reconfiguration commands are intentionally disabled; UART command support is read-only apart from role detection.
 
 ## 2) Firmware Architecture Map
@@ -58,7 +58,7 @@ Key SS-TWR path:
 4. Compute round-trip and responder reply delay.
 5. Apply DW3000 clock-offset correction.
 6. Convert time of flight to meters.
-7. Emit CSV (`ms,sample,dist`).
+7. Emit CSV (`ms,sample,dist,iax,iay,iaz,rax,ray,raz`).
 
 The hot-path output function is `write_distance_csv(...)`.
 
@@ -226,10 +226,11 @@ Initiator                           Responder
    | -- Poll ----------------------> |
    |                                 |
    | <---- Response ---------------- |
-   |      poll_rx_ts, resp_tx_ts     |
+        |      poll_rx_ts, resp_tx_ts,    |
+        |      responder accel XYZ        |
    |                                 |
    | compute ToF and distance        |
-   | output CSV: ms,sample,dist      |
+        | output CSV with distance + accel|
 ```
 
 ### 11.2 Dummy timestamps
@@ -268,7 +269,7 @@ With the constants used by the SDK, this dummy example lands around a few meters
 ### 11.4 Example CSV line
 
 ```text
-1203,57,3.00
+1203,57,3.00,18,-42,1001,12,-39,998
 ```
 
 Meaning:
@@ -276,14 +277,24 @@ Meaning:
 - `1203`: local initiator milliseconds
 - `57`: measurement counter
 - `3.00`: computed distance in meters
+- `18,-42,1001`: initiator accelerometer X/Y/Z in mg
+- `12,-39,998`: responder accelerometer X/Y/Z in mg
 
 ## 12) UART Contract
 
 Current primary runtime CSV output:
 
 ```text
-ms,sample,dist
+ms,sample,dist,iax,iay,iaz,rax,ray,raz
 ```
+
+Fields:
+
+- `ms`: local initiator milliseconds
+- `sample`: measurement counter
+- `dist`: computed distance in meters
+- `iax,iay,iaz`: initiator accelerometer X/Y/Z in mg
+- `rax,ray,raz`: responder accelerometer X/Y/Z in mg transported over UWB Response
 
 UART configuration:
 
@@ -308,7 +319,7 @@ Runtime behavior:
 
 - connects to the initiator over USB OTG serial
 - uses 460800 baud
-- parses `ms,sample,dist`
+- parses `ms,sample,dist,iax,iay,iaz,rax,ray,raz`
 - displays live distance, quality indicators, and session status
 - records CSV files to Android Downloads
 - does not send runtime UWB mode/channel/profile commands

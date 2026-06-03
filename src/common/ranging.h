@@ -99,6 +99,6 @@ void ranging_msg_get_ts(const uint8_t *ts_field, uint32_t *ts);
 #define POLL_MSG_ACCEL_Z_IDX  14
 
 /* Maximum RX buffer size */
-#define RX_BUF_LEN 30
+#define RX_BUF_LEN 40
 
 #endif /* RANGING_H */

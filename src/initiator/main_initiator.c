@@ -50,6 +50,9 @@
 #define RESP_MSG_CTRL_TEST_PROFILE_IDX 16
 #define RESP_MSG_SS_POLL_RX_TS_IDX 17
 #define RESP_MSG_SS_RESP_TX_TS_IDX 21
+#define RESP_MSG_ACCEL_X_IDX      25
+#define RESP_MSG_ACCEL_Y_IDX      27
+#define RESP_MSG_ACCEL_Z_IDX      29
 
 #define RESP_FLAG_SWITCH_PENDING 0x01u
 #define RESP_FLAG_ACQ_PENDING    0x02u
@@ -166,7 +169,7 @@ static bool is_supported_test_profile(uint8_t profile)
 static uint8_t test_profile_accel_decimation(uint8_t profile)
 {
     (void)profile;
-    return 0u;
+    return 1u;
 }
 
 static char *append_u32(char *dst, uint32_t value)
@@ -186,6 +189,23 @@ static char *append_u32(char *dst, uint32_t value)
     }
 
     return dst;
+}
+
+static char *append_i32(char *dst, int32_t value)
+{
+    uint32_t magnitude;
+
+    if (value < 0)
+    {
+        *dst++ = '-';
+        magnitude = (uint32_t)(-value);
+    }
+    else
+    {
+        magnitude = (uint32_t)value;
+    }
+
+    return append_u32(dst, magnitude);
 }
 
 static char *append_distance_cm(char *dst, int32_t distance_cm)
@@ -212,7 +232,9 @@ static char *append_distance_cm(char *dst, int32_t distance_cm)
     return dst;
 }
 
-static void write_distance_csv(uint32_t ms, uint32_t sample, float distance_m)
+static void write_distance_csv(uint32_t ms, uint32_t sample, float distance_m,
+                               const accel_data_t *initiator_accel,
+                               const int16_t responder_accel[3])
 {
     char *dst = output_buf;
     float distance_cm_f = distance_m * 100.0f;
@@ -223,6 +245,18 @@ static void write_distance_csv(uint32_t ms, uint32_t sample, float distance_m)
     dst = append_u32(dst, sample);
     *dst++ = ',';
     dst = append_distance_cm(dst, distance_cm);
+    *dst++ = ',';
+    dst = append_i32(dst, initiator_accel->x);
+    *dst++ = ',';
+    dst = append_i32(dst, initiator_accel->y);
+    *dst++ = ',';
+    dst = append_i32(dst, initiator_accel->z);
+    *dst++ = ',';
+    dst = append_i32(dst, responder_accel[0]);
+    *dst++ = ',';
+    dst = append_i32(dst, responder_accel[1]);
+    *dst++ = ',';
+    dst = append_i32(dst, responder_accel[2]);
     *dst = '\0';
 
     uart_log_write(output_buf);
@@ -364,7 +398,7 @@ int ss_twr_initiator_custom(void)
 
     /* CSV header on UART */
     test_run_info((unsigned char *)"# sample,distance_m,poll_tx,resp_rx,final_tx");
-    uart_log_write("# ms,sample,dist");
+    uart_log_write("# ms,sample,dist,iax,iay,iaz,rax,ray,raz");
 
     NRF_RTC2->PRESCALER = 0;
     NRF_RTC2->TASKS_START = 1;
@@ -526,9 +560,20 @@ int ss_twr_initiator_custom(void)
                         float clock_offset_ratio;
                         float tof_dtu;
                         uint32_t ms;
+                        int16_t responder_accel[3] = { 0, 0, 0 };
 
                         ranging_msg_get_ts(&rx_buffer[RESP_MSG_SS_POLL_RX_TS_IDX], &responder_poll_rx_ts);
                         ranging_msg_get_ts(&rx_buffer[RESP_MSG_SS_RESP_TX_TS_IDX], &responder_resp_tx_ts);
+
+                        if (frame_len > RESP_MSG_ACCEL_Z_IDX + 1)
+                        {
+                            responder_accel[0] = (int16_t)(rx_buffer[RESP_MSG_ACCEL_X_IDX] |
+                                                  (rx_buffer[RESP_MSG_ACCEL_X_IDX + 1] << 8));
+                            responder_accel[1] = (int16_t)(rx_buffer[RESP_MSG_ACCEL_Y_IDX] |
+                                                  (rx_buffer[RESP_MSG_ACCEL_Y_IDX + 1] << 8));
+                            responder_accel[2] = (int16_t)(rx_buffer[RESP_MSG_ACCEL_Z_IDX] |
+                                                  (rx_buffer[RESP_MSG_ACCEL_Z_IDX + 1] << 8));
+                        }
 
                         rtd_init = resp_rx_ts_32 - poll_tx_ts_32;
                         reply_resp = responder_resp_tx_ts - responder_poll_rx_ts;
@@ -539,7 +584,7 @@ int ss_twr_initiator_custom(void)
                         ranging_count++;
 
                         ms = (uint32_t)(((uint64_t)NRF_RTC2->COUNTER * 1000u) / 32768u);
-                        write_distance_csv(ms, ranging_count, distance);
+                        write_distance_csv(ms, ranging_count, distance, &accel_data, responder_accel);
 
                         if (switch_request_armed && (pending_switch_token != 0u) && (tx_poll_msg[POLL_MSG_SWITCH_TOKEN_IDX] == pending_switch_token))
                         {

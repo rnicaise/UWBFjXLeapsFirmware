@@ -54,14 +54,19 @@ android-receiver-app/
 Expected firmware line:
 
 ```text
-ms,sample,dist
+ms,sample,dist,iax,iay,iaz,rax,ray,raz
 ```
 
 Example:
 
 ```text
-1234,42,1.27
+1234,42,1.27,18,-42,1001,12,-39,998
 ```
+
+Accelerometer fields are signed integer milligravity values:
+
+- `iax,iay,iaz`: initiator X/Y/Z
+- `rax,ray,raz`: responder X/Y/Z, transported back over the UWB Response
 
 Parser behavior:
 

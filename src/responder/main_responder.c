@@ -34,6 +34,9 @@
 #define RESP_MSG_CTRL_TEST_PROFILE_IDX 16
 #define RESP_MSG_SS_POLL_RX_TS_IDX    17
 #define RESP_MSG_SS_RESP_TX_TS_IDX    21
+#define RESP_MSG_ACCEL_X_IDX          25
+#define RESP_MSG_ACCEL_Y_IDX          27
+#define RESP_MSG_ACCEL_Z_IDX          29
 
 #define RESP_FLAG_SWITCH_PENDING 0x01u
 #define RESP_FLAG_ACQ_PENDING    0x02u
@@ -60,7 +63,10 @@ static uint8_t tx_resp_msg[] = {
     0x02,
     0, 0, 0, 0, 0, 0,
     0, 0, 0, 0,
-    0, 0, 0, 0
+    0, 0, 0, 0,
+    0, 0,
+    0, 0,
+    0, 0
 };
 
 static uint8_t rx_final_msg[] = {
@@ -142,7 +148,7 @@ static bool is_supported_test_profile(uint8_t profile)
 static uint8_t test_profile_accel_decimation(uint8_t profile)
 {
     (void)profile;
-    return 0u;
+    return 1u;
 }
 
 static int apply_profile_option(uint8_t opt)
@@ -381,6 +387,12 @@ int ss_twr_responder_custom(void)
                 tx_resp_msg[RESP_MSG_CTRL_TEST_PROFILE_IDX] = current_test_profile;
                 ranging_msg_set_ts(&tx_resp_msg[RESP_MSG_SS_POLL_RX_TS_IDX], poll_rx_ts);
                 ranging_msg_set_ts(&tx_resp_msg[RESP_MSG_SS_RESP_TX_TS_IDX], resp_tx_ts);
+                tx_resp_msg[RESP_MSG_ACCEL_X_IDX] = (uint8_t)(accel_local.x & 0xFF);
+                tx_resp_msg[RESP_MSG_ACCEL_X_IDX + 1] = (uint8_t)((accel_local.x >> 8) & 0xFF);
+                tx_resp_msg[RESP_MSG_ACCEL_Y_IDX] = (uint8_t)(accel_local.y & 0xFF);
+                tx_resp_msg[RESP_MSG_ACCEL_Y_IDX + 1] = (uint8_t)((accel_local.y >> 8) & 0xFF);
+                tx_resp_msg[RESP_MSG_ACCEL_Z_IDX] = (uint8_t)(accel_local.z & 0xFF);
+                tx_resp_msg[RESP_MSG_ACCEL_Z_IDX + 1] = (uint8_t)((accel_local.z >> 8) & 0xFF);
                 dwt_writetxdata(sizeof(tx_resp_msg), tx_resp_msg, 0);
                 dwt_writetxfctrl(sizeof(tx_resp_msg) + FCS_LEN, 0, 1);
 
@@ -394,6 +406,11 @@ int ss_twr_responder_custom(void)
                 waitforsysstatus(NULL, NULL, DWT_INT_TXFRS_BIT_MASK, 0);
                 dwt_writesysstatuslo(DWT_INT_TXFRS_BIT_MASK);
                 frame_seq_nb++;
+
+                if (accel_ok && !accel_read(&accel_local))
+                {
+                    accel_ok = false;
+                }
 
                 if (switch_after_final)
                 {
