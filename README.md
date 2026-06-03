@@ -1,114 +1,129 @@
-# UWB Ranging Minimal — DS-TWR sans FiRa
+# UWB Ranging Firmware (SS-TWR)
 
-Système de mesure de distance UWB entre deux modules Qorvo DW3000,
-basé sur le protocole Double-Sided Two-Way Ranging (DS-TWR).
+This repository contains the embedded firmware for a two-board UWB ranging setup based on Qorvo DW3000 and nRF52.
 
-## Guide développeur détaillé
+Current runtime target:
+- SS-TWR live workflow
+- Initiator computes distance
+- Responder returns delayed response timestamps
+- UART stream from initiator at 460800 baud
 
-Pour une explication pas à pas du code embarqué (niveau débutant C), lire:
+For detailed implementation notes, see README_DEV.md.
 
-- [README_DEV.md](README_DEV.md)
+## Repository Scope
 
-## Architecture du projet
+This shared repository is firmware-focused.
 
-```
-uwb-ranging/
-├── README.md                  ← ce fichier
-├── README_DEV.md              ← guide dev détaillé (débutant C)
-├── CMakeLists.txt             ← build principal (pointe vers le SDK)
-├── CMakePresets.json           ← presets de build (debug/release)
-│
-├── src/
-│   ├── initiator/
-│   │   └── main_initiator.c   ← firmware Module A (envoie Poll, calcule distance)
-│   │
-│   ├── responder/
-│   │   └── main_responder.c   ← firmware Module B (répond au Poll)
-│   │
-│   └── common/
-│       ├── ranging.h           ← types et constantes partagés
-│       └── ranging.c           ← fonctions utilitaires partagées
-```
+Included:
+- Embedded sources in src
+- CMake build and presets
+- Vendor SDK integration under vendor
+- Minimal test target under test_minimal
 
-## Comment ça fonctionne
+Excluded from this shared branch:
+- Android receiver application
+- Executive summary material
+- Python tooling scripts
 
-### Protocole DS-TWR (3 messages)
+## Project Layout
 
-```
-Module A (Initiator)              Module B (Responder)
-       |                                  |
-  t1   |-------- POLL ------------------>| t2
-       |                                  |
-  t4   |<------- RESPONSE ---------------| t3
-       |                                  |
-  t5   |-------- FINAL ----------------->| t6
-       |                                  |
-       |  (A envoie t1,t4,t5 dans FINAL)  |
-       |                                  |
-       |  B calcule la distance avec      |
-       |  les 6 timestamps (t1..t6)       |
+```text
+.
+├── CMakeLists.txt
+├── CMakePresets.json
+├── README.md
+├── README_DEV.md
+├── src
+│   ├── initiator
+│   ├── responder
+│   ├── common
+│   ├── uart
+│   ├── platform
+│   ├── board
+│   ├── accel
+│   └── ble
+├── test_minimal
+└── vendor
 ```
 
-### Formule DS-TWR
+## Runtime Architecture
 
+Two firmware roles are built separately:
+- Initiator: sends poll, receives response, computes distance, outputs CSV
+- Responder: receives poll, schedules delayed response, embeds timestamps
+
+High-level flow:
+
+```text
+Initiator --POLL--> Responder --RESPONSE(with timestamps)--> Initiator --distance--> UART CSV
 ```
-Ra = t4 - t1    (round-trip A)
-Rb = t6 - t3    (round-trip B)
-Da = t5 - t4    (délai traitement A)
-Db = t3 - t2    (délai traitement B)
 
-ToF = (Ra × Rb - Da × Db) / (Ra + Rb + Da + Db)
-Distance = ToF × vitesse_lumière
+## CSV Output Contract
+
+Primary runtime stream from initiator:
+
+```text
+ms,sample,dist
+1203,57,2.34
 ```
 
-**Avantage DS-TWR** : les erreurs de clock s'annulent grâce au double
-aller-retour → pas besoin de correction clockOffset comme en SS-TWR.
+Notes:
+- dist is in meters
+- ms is local initiator timestamp
+- serial settings must match host side (460800 baud)
 
-## Dépendances
+## Build Requirements
 
-Ce projet utilise le SDK Qorvo **DW3_QM33_SDK_1** comme dépendance externe.
-Le chemin vers le SDK est configuré dans `CMakeLists.txt` via la variable
-`QORVO_SDK_PATH`.
-
-### Prérequis
-
-- CMake ≥ 3.20
+- CMake 3.20 or newer
 - Ninja
-- ARM GNU Toolchain 12.2 (`arm-none-eabi-gcc`)
-- SDK Qorvo DW3_QM33_SDK_1
+- ARM GCC toolchain (arm-none-eabi)
+- Nordic programming tools (nrfjprog) for flashing
+
+The required SDK sources are already vendored in this repository.
 
 ## Build
 
+From repository root:
+
 ```bash
-# Compiler l'initiator (Module A)
 cmake --preset=initiator_debug
 cmake --build --preset initiator_debug
 
-# Compiler le responder (Module B)
 cmake --preset=responder_debug
 cmake --build --preset responder_debug
 ```
 
+Generated firmware files:
+- build/initiator_debug/uwb_initiator.hex
+- build/responder_debug/uwb_responder.hex
+
 ## Flash
 
+Example with nrfjprog:
+
 ```bash
-# Via nrfjprog (Nordic)
-nrfjprog --program build/initiator_debug/uwb_initiator.hex --chiperase --verify
-nrfjprog --reset
-
-# Ou via J-Link
-JLinkExe -device NRF52840_XXAA -if SWD -speed 4000 -autoconnect 1
-> loadfile build/initiator_debug/uwb_initiator.hex
-> r
-> g
+nrfjprog --snr <INITIATOR_SNR> --program build/initiator_debug/uwb_initiator.hex --sectorerase --verify --reset
+nrfjprog --snr <RESPONDER_SNR> --program build/responder_debug/uwb_responder.hex --sectorerase --verify --reset
 ```
 
-## Output UART (debug)
+If only one probe is connected, the --snr argument can be omitted.
 
-À 115200 baud, format CSV :
+## Quick Bring-Up Checklist
 
-```
-# sample,distance_m,poll_tx,resp_rx,final_tx,poll_rx,resp_tx,final_rx
-1,2.34,0x1A2B3C,0x4D5E6F,0x7A8B9C,0xAB1234,0xCD5678,0xEF9ABC
-2,2.31,...
-```
+1. Flash initiator and responder with matching builds.
+2. Power both boards and place them within expected range.
+3. Connect serial host to initiator board.
+4. Confirm CSV lines are continuously emitted.
+5. Move boards and verify distance changes.
+
+## Notes for Reviewers
+
+- Main timing constants: src/common/ranging.h
+- Runtime profile definitions: src/common/uwb_profiles.c
+- Initiator ranging loop: src/initiator/main_initiator.c
+- Responder response loop: src/responder/main_responder.c
+- UART implementation: src/uart/uart_log.c
+
+## License
+
+See vendor and project files for applicable licensing terms.
