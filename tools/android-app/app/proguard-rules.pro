@@ -1,1 +1,1 @@
-# Keep default minimal release rules.
+# Project currently ships without minification in release.

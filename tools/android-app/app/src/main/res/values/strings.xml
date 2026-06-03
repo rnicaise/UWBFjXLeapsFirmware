@@ -1,9 +1,5 @@
 <resources>
-    <string name="app_name">Leaps CSV Logger</string>
-    <string name="state_idle">Idle</string>
-    <string name="state_logging">Logging</string>
-    <string name="action_start">Start</string>
-    <string name="action_stop">Stop</string>
-    <string name="input_hint">Paste one CSV line here for quick test</string>
-    <string name="action_ingest">Ingest Line</string>
+    <string name="app_name">UWB Receiver</string>
+    <string name="notif_channel_name">UWB acquisition</string>
+    <string name="notif_channel_desc">Live USB serial acquisition and recording</string>
 </resources>
