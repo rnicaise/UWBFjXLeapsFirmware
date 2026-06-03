@@ -107,7 +107,7 @@ static bool period_after_final = false;
 
 static uint8_t last_initiator_acq_period_ms = RNG_DELAY_MS;
 static uint8_t last_initiator_profile_opt = UWB_PROFILE_OPT_6M8_STABLE;
-static uint8_t current_test_profile = UWB_TEST_PROFILE_DEFAULT;
+static uint8_t current_test_profile = UWB_TEST_PROFILE_FAST_ACCEL_DECIMATED;
 static uint8_t last_initiator_test_profile = UWB_TEST_PROFILE_DEFAULT;
 static uint32_t responder_accel_sample_count = 0;
 
@@ -149,20 +149,29 @@ static bool is_supported_test_profile(uint8_t profile)
 static uint8_t test_profile_accel_decimation(uint8_t profile)
 {
     (void)profile;
-    return 0u;
+    return 1u;
 }
 
-static const char *test_profile_name(uint8_t profile)
+static void write_accel_exchange_csv(uint32_t ms,
+                                     uint32_t sample,
+                                     int16_t iax,
+                                     int16_t iay,
+                                     int16_t iaz,
+                                     int16_t rax,
+                                     int16_t ray,
+                                     int16_t raz)
 {
-    switch (profile)
-    {
-        case UWB_TEST_PROFILE_TURBO_DISTANCE_ONLY:
-            return "TURBO_DISTANCE_ONLY";
-        case UWB_TEST_PROFILE_FAST_DISTANCE_ONLY:
-            return "FAST_DISTANCE_ONLY";
-        default:
-            return "UNKNOWN";
-    }
+    snprintf(output_buf, sizeof(output_buf),
+             "%lu,%lu,%d,%d,%d,%d,%d,%d",
+             (unsigned long)ms,
+             (unsigned long)sample,
+             (int)iax,
+             (int)iay,
+             (int)iaz,
+             (int)rax,
+             (int)ray,
+             (int)raz);
+    uart_log_write(output_buf);
 }
 
 static int apply_profile_option(uint8_t opt)
@@ -370,132 +379,36 @@ static void handle_app_command(const char *cmd)
 
     if (parse_test_profile_command(cmd, &requested_test_profile))
     {
-        if (!is_supported_test_profile(requested_test_profile))
-        {
-            uart_log_write("ERR,TEST_PROFILE_UNSUPPORTED");
-            return;
-        }
-
-        current_test_profile = requested_test_profile;
-        responder_accel_sample_count = 0;
-
-        snprintf(output_buf, sizeof(output_buf),
-                 "ACK,TEST_PROFILE_APPLIED,profile=%s,id=%u",
-                 test_profile_name(current_test_profile),
-                 (unsigned int)current_test_profile);
-        uart_log_write(output_buf);
+        (void)requested_test_profile;
+        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
         return;
     }
 
     if (parse_channel_command(cmd, &requested_channel))
     {
-        requested_opt = uwb_profile_opt_for_channel_rate_kbps(requested_channel, active_profile != NULL ? active_profile->data_rate_kbps : 6800);
-
-        if (!is_supported_profile_opt(requested_opt))
-        {
-            uart_log_write("ERR,UWB_CHANNEL_UNSUPPORTED");
-            return;
-        }
-
-        if (requested_opt == current_profile_opt)
-        {
-            snprintf(output_buf, sizeof(output_buf),
-                     "ACK,UWB_CHANNEL_ALREADY_APPLIED,ch=%u,opt=%u",
-                     (unsigned int)requested_channel,
-                     (unsigned int)current_profile_opt);
-            uart_log_write(output_buf);
-            return;
-        }
-
-        pending_profile_opt = requested_opt;
-        pending_switch_token++;
-        if (pending_switch_token == 0u)
-        {
-            pending_switch_token = 1u;
-        }
-        switch_pending = true;
-
-        snprintf(output_buf, sizeof(output_buf),
-                 "ACK,UWB_CHANNEL_PENDING,ch=%u,opt=%u,token=%u",
-                 (unsigned int)requested_channel,
-                 (unsigned int)pending_profile_opt,
-                 (unsigned int)pending_switch_token);
-        uart_log_write(output_buf);
+        (void)requested_channel;
+        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
         return;
     }
 
     if (parse_rate_command(cmd, &requested_opt))
     {
-        if (requested_opt == UWB_PROFILE_OPT_850K_ROBUST)
-        {
-            uart_log_write("ERR,UWB_DATARATE_REQUIRES_BOOT_PROFILE,kbps=850");
-            return;
-        }
-
-        if (!is_supported_profile_opt(requested_opt))
-        {
-            uart_log_write("ERR,UWB_DATARATE_UNSUPPORTED");
-            return;
-        }
-
-        if (requested_opt == current_profile_opt)
-        {
-            uart_log_write("ACK,UWB_DATARATE_ALREADY_APPLIED");
-            return;
-        }
-
-        pending_profile_opt = requested_opt;
-        pending_switch_token++;
-        if (pending_switch_token == 0u)
-        {
-            pending_switch_token = 1u;
-        }
-        switch_pending = true;
-
-        snprintf(output_buf, sizeof(output_buf),
-                 "ACK,UWB_DATARATE_PENDING,opt=%u,token=%u",
-                 (unsigned int)pending_profile_opt,
-                 (unsigned int)pending_switch_token);
-        uart_log_write(output_buf);
+        (void)requested_opt;
+        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
         return;
     }
 
     if (parse_acq_period_command(cmd, &requested_period))
     {
-        if (!is_supported_acq_period(requested_period))
-        {
-            uart_log_write("ERR,ACQ_PERIOD_OUT_OF_RANGE");
-            return;
-        }
-
-        if (requested_period == current_acq_period_ms)
-        {
-            snprintf(output_buf, sizeof(output_buf),
-                     "ACK,ACQ_PERIOD_ALREADY_APPLIED,resp_ms=%u,init_ms=%u",
-                     (unsigned int)current_acq_period_ms,
-                     (unsigned int)last_initiator_acq_period_ms);
-            uart_log_write(output_buf);
-            return;
-        }
-
-        /* Period only controls loop pacing, so we can apply it immediately.
-         * Initiator will follow the responder-advertised period in the response control field. */
-        current_acq_period_ms = requested_period;
-        period_pending = false;
-        period_after_final = false;
-
-        snprintf(output_buf, sizeof(output_buf),
-                 "ACK,ACQ_PERIOD_APPLIED,resp_ms=%u,init_ms=%u",
-                 (unsigned int)current_acq_period_ms,
-                 (unsigned int)last_initiator_acq_period_ms);
-        uart_log_write(output_buf);
+        (void)requested_period;
+        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
         return;
     }
 
     if (parse_ranging_mode_command(cmd, &requested_mode))
     {
         (void)requested_mode;
-        uart_log_write("ACK,RANGING_MODE_APPLIED,mode=SS_TWR");
+        uart_log_write("ACK,SINGLE_MODE_LOCKED,mode=ACCEL_EXCHANGE");
         return;
     }
 
@@ -566,8 +479,8 @@ int ds_twr_responder_custom(void)
     NRF_RTC2->PRESCALER = 0;
     NRF_RTC2->TASKS_START = 1;
 
-    test_run_info((unsigned char *)"# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt");
-    uart_log_write("# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt");
+    test_run_info((unsigned char *)"# ms,sample,iax,iay,iaz,rax,ray,raz");
+    uart_log_write("# ms,sample,iax,iay,iaz,rax,ray,raz");
 
     while (1)
     {
@@ -608,6 +521,24 @@ int ds_twr_responder_custom(void)
                               (rx_buffer[POLL_MSG_ACCEL_Y_IDX + 1] << 8));
                 accel_rx[2] = (int16_t)(rx_buffer[POLL_MSG_ACCEL_Z_IDX] |
                               (rx_buffer[POLL_MSG_ACCEL_Z_IDX + 1] << 8));
+
+                if (!accel_ok)
+                {
+                    accel_ok = accel_init();
+                }
+                if (accel_ok)
+                {
+                    if (!accel_read(&accel_local))
+                    {
+                        accel_ok = false;
+                    }
+                }
+                else
+                {
+                    accel_local.x = 0;
+                    accel_local.y = 0;
+                    accel_local.z = 0;
+                }
 
                 if (frame_len > POLL_MSG_ACQ_PERIOD_IDX)
                 {
@@ -696,6 +627,19 @@ int ds_twr_responder_custom(void)
                 waitforsysstatus(NULL, NULL, DWT_INT_TXFRS_BIT_MASK, 0);
                 dwt_writesysstatuslo(DWT_INT_TXFRS_BIT_MASK);
                 frame_seq_nb++;
+                ranging_count++;
+
+                {
+                    uint32_t ms = (uint32_t)(((uint64_t)NRF_RTC2->COUNTER * 1000u) / 32768u);
+                    write_accel_exchange_csv(ms,
+                                             ranging_count,
+                                             accel_rx[0],
+                                             accel_rx[1],
+                                             accel_rx[2],
+                                             accel_local.x,
+                                             accel_local.y,
+                                             accel_local.z);
+                }
 
                 if (switch_after_final)
                 {
