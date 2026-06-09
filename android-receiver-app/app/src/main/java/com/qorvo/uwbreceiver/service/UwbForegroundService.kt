@@ -50,6 +50,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import java.io.IOException
 
@@ -65,6 +67,7 @@ class UwbForegroundService : Service() {
     private var connectJob: Job? = null
     private var readJob: Job? = null
     private var settingsJob: Job? = null
+    private val commandMutex = Mutex()
 
     private var shouldConnect = false
 
@@ -192,6 +195,15 @@ class UwbForegroundService : Service() {
 
             ACTION_START_RECORDING -> startRecordingInternal()
             ACTION_STOP_RECORDING -> stopRecordingInternal()
+            ACTION_FIRE -> {
+                serviceScope.launch {
+                    val sent = sendCommandSlowly("PYRO,FIRE\n")
+                    RuntimeStore.setLinkState(
+                        RuntimeStore.state.value.linkState,
+                        if (sent) "FIRE command sent" else "FIRE send failed",
+                    )
+                }
+            }
         }
 
         return START_STICKY
@@ -351,6 +363,10 @@ class UwbForegroundService : Service() {
             return
         }
 
+        if (line.startsWith("ACCEL_SRC,") || line.startsWith("ACCEL,")) {
+            return
+        }
+
         if (line.startsWith("ACK,") || line.startsWith("ERR,")) {
             RuntimeStore.setLinkState(RuntimeStore.state.value.linkState, line)
             return
@@ -456,23 +472,25 @@ class UwbForegroundService : Service() {
     }
 
     private suspend fun sendCommandSlowly(command: String): Boolean {
-        val port = activePort ?: return false
-        return try {
-            val payload = command.toByteArray(Charsets.US_ASCII)
-            val singleByte = ByteArray(1)
-            for (byte in payload) {
-                if (activePort !== port) {
-                    return false
+        return commandMutex.withLock {
+            val port = activePort ?: return@withLock false
+            try {
+                val payload = command.toByteArray(Charsets.US_ASCII)
+                val singleByte = ByteArray(1)
+                for (byte in payload) {
+                    if (activePort !== port) {
+                        return@withLock false
+                    }
+                    singleByte[0] = byte
+                    port.write(singleByte, 200)
+                    delay(COMMAND_BYTE_DELAY_MS)
                 }
-                singleByte[0] = byte
-                port.write(singleByte, 200)
-                delay(COMMAND_BYTE_DELAY_MS)
+                Timber.i("Sent command: %s", command.trim())
+                true
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to send command")
+                false
             }
-            Timber.i("Sent command: %s", command.trim())
-            true
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to send command")
-            false
         }
     }
 
@@ -657,6 +675,7 @@ class UwbForegroundService : Service() {
         const val ACTION_DISCONNECT = "com.qorvo.uwbreceiver.action.DISCONNECT"
         const val ACTION_START_RECORDING = "com.qorvo.uwbreceiver.action.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.qorvo.uwbreceiver.action.STOP_RECORDING"
+        const val ACTION_FIRE = "com.qorvo.uwbreceiver.action.FIRE"
 
         private const val ACTION_USB_PERMISSION = "com.qorvo.uwbreceiver.action.USB_PERMISSION"
     }

@@ -54,6 +54,7 @@ message("=== UWB Ranging Minimal ===")
 message("SDK path: ${QORVO_SDK_PATH}")
 message("Build type: ${CMAKE_BUILD_TYPE}")
 message("Role: ${UWB_ROLE}")
+message("Accel target: ${UWB_ACCEL_TARGET}")
 
 # Validate role selection.
 if(NOT DEFINED UWB_ROLE)
@@ -61,6 +62,13 @@ if(NOT DEFINED UWB_ROLE)
 endif()
 if(NOT UWB_ROLE STREQUAL "initiator" AND NOT UWB_ROLE STREQUAL "responder")
     message(FATAL_ERROR "UWB_ROLE must be 'initiator' or 'responder' (received: ${UWB_ROLE})")
+endif()
+
+if(NOT DEFINED UWB_ACCEL_TARGET)
+    set(UWB_ACCEL_TARGET "legacy" CACHE STRING "Accelerometer hardware target: legacy|gena|auto")
+endif()
+if(NOT UWB_ACCEL_TARGET STREQUAL "legacy" AND NOT UWB_ACCEL_TARGET STREQUAL "gena" AND NOT UWB_ACCEL_TARGET STREQUAL "auto")
+    message(FATAL_ERROR "UWB_ACCEL_TARGET must be 'legacy', 'gena', or 'auto' (received: ${UWB_ACCEL_TARGET})")
 endif()
 
 # nRF52833 memory layout for DWM3001CDK.
@@ -127,8 +135,8 @@ set_source_files_properties(
 )
 
 # Output names.
-set(TARGET_ELF uwb_${UWB_ROLE}.elf)
-set(TARGET_HEX uwb_${UWB_ROLE}.hex)
+set(TARGET_ELF uwb_${UWB_ROLE}_${UWB_ACCEL_TARGET}.elf)
+set(TARGET_HEX uwb_${UWB_ROLE}_${UWB_ACCEL_TARGET}.hex)
 
 # Sources.
 # Sources platform — custom DWM3001CDK (single DW3000, no SPI2/IRQ2)
@@ -169,6 +177,7 @@ set(PROJECT_SOURCES
     ${CMAKE_SOURCE_DIR}/src/common/ranging.c
     ${CMAKE_SOURCE_DIR}/src/common/radio_quality.c
     ${CMAKE_SOURCE_DIR}/src/common/uwb_profiles.c
+    ${CMAKE_SOURCE_DIR}/src/board/pyro_buzzer.c
 )
 
 # Select initiator or responder application source.
@@ -265,10 +274,14 @@ target_compile_definitions(${TARGET_ELF} PRIVATE
     # Role selection for main.c.
     $<$<STREQUAL:${UWB_ROLE},initiator>:UWB_ROLE_INITIATOR>
     $<$<STREQUAL:${UWB_ROLE},responder>:UWB_ROLE_RESPONDER>
+    # Accelerometer hardware generation selection.
+    $<$<STREQUAL:${UWB_ACCEL_TARGET},legacy>:UWB_ACCEL_TARGET_LEGACY>
+    $<$<STREQUAL:${UWB_ACCEL_TARGET},gena>:UWB_ACCEL_TARGET_GENA>
+    $<$<STREQUAL:${UWB_ACCEL_TARGET},auto>:UWB_ACCEL_TARGET_AUTO>
 )
 
 target_link_options(${TARGET_ELF} PRIVATE
-    -Wl,-Map=$<TARGET_FILE_DIR:${TARGET_ELF}>/uwb_${UWB_ROLE}.map
+    -Wl,-Map=$<TARGET_FILE_DIR:${TARGET_ELF}>/uwb_${UWB_ROLE}_${UWB_ACCEL_TARGET}.map
 )
 
 set_target_properties(${TARGET_ELF} PROPERTIES

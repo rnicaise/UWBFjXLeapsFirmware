@@ -4,6 +4,8 @@ This repository contains embedded firmware for a two-board UWB ranging system ba
 
 The delivery intentionally keeps a single public README and a single supported runtime mode. The project is documented as a technical architecture guide, not as a beginner C tutorial.
 
+For current GenA/legacy firmware variants, accelerometer targets, pyro pins, and flash commands, see `docs/ai-handoff.md`.
+
 ## 1) Current Runtime Scope
 
 Current production-oriented behavior:
