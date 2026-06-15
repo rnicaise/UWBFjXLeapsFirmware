@@ -43,10 +43,13 @@ static accel_backend_t active_backend = ACCEL_BACKEND_NONE;
 #define BMI323_REG_CHIP_ID    0x00u
 #define BMI323_REG_ERR_REG    0x01u
 #define BMI323_REG_ACC_DATA_X 0x03u
+#define BMI323_REG_GYR_DATA_X 0x06u
 #define BMI323_REG_ACC_CONF   0x20u
+#define BMI323_REG_GYR_CONF   0x21u
 
 #define BMI323_CHIP_ID_EXPECTED 0x43u
 #define BMI323_ACC_CONF_VALUE 0x4027u
+#define BMI323_GYR_CONF_VALUE 0x4027u
 #define BMI323_ERR_FATAL_MASK 0x0001u
 
 static uint8_t bmi323_read_addr_flag = 0x80u;
@@ -377,6 +380,10 @@ static bool ACCEL_MAYBE_UNUSED bmi323_init(void)
     {
         return false;
     }
+    if (!bmi323_write_reg16(BMI323_REG_GYR_CONF, BMI323_GYR_CONF_VALUE))
+    {
+        return false;
+    }
 
     nrf_delay_ms(5u);
 
@@ -418,6 +425,40 @@ static bool bmi323_read(accel_data_t *data)
     data->x = bmi323_raw_to_mg((int16_t)raw_x);
     data->y = bmi323_raw_to_mg((int16_t)raw_y);
     data->z = bmi323_raw_to_mg((int16_t)raw_z);
+
+    return true;
+}
+
+static bool bmi323_read_gyro(gyro_data_t *data)
+{
+    uint16_t raw_x;
+    uint16_t raw_y;
+    uint16_t raw_z;
+
+    if (data == NULL)
+    {
+        return false;
+    }
+    if (!bmi323_read_reg16(BMI323_REG_GYR_DATA_X, &raw_x))
+    {
+        return false;
+    }
+    if (!bmi323_read_reg16((uint8_t)(BMI323_REG_GYR_DATA_X + 1u), &raw_y))
+    {
+        return false;
+    }
+    if (!bmi323_read_reg16((uint8_t)(BMI323_REG_GYR_DATA_X + 2u), &raw_z))
+    {
+        return false;
+    }
+    if ((raw_x == 0x8000u) || (raw_y == 0x8000u) || (raw_z == 0x8000u))
+    {
+        return false;
+    }
+
+    data->x = (int16_t)raw_x;
+    data->y = (int16_t)raw_y;
+    data->z = (int16_t)raw_z;
 
     return true;
 }
@@ -635,6 +676,25 @@ bool accel_read(accel_data_t *data)
     if (active_backend == ACCEL_BACKEND_LIS2DH12)
     {
         return lis2dh12_read(data);
+    }
+
+    return false;
+}
+
+bool accel_read_gyro(gyro_data_t *data)
+{
+    if (data == NULL)
+    {
+        return false;
+    }
+
+    data->x = 0;
+    data->y = 0;
+    data->z = 0;
+
+    if (active_backend == ACCEL_BACKEND_BMI323)
+    {
+        return bmi323_read_gyro(data);
     }
 
     return false;

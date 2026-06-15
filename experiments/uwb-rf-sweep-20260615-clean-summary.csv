@@ -1,0 +1,10 @@
+opt,name,state,signal,samples,valid,valid_pct,hz,mean_m,std_cm,span95_cm,max_jump_cm,jumps_gt_10cm,jumps_gt_20cm,nlos_mean,peak_fp_mean,rx_fp_gap_mean,rx_power_mean,fp_power_mean,path
+35,ch5_6m8_plen128,ok,raw,24535,24535,100.00,409.56,0.6367,2.87,9.00,15.00,104,0,7.00,1.55,0.90,-64.0,-64.9,experiments/uwb-rf-35-ch5_6m8_plen128-20260615-clean.csv
+35,ch5_6m8_plen128,ok,firmware_median5,24535,24535,100.00,409.56,0.6387,2.23,7.00,7.00,0,0,7.00,1.55,0.90,-64.0,-64.9,experiments/uwb-rf-35-ch5_6m8_plen128-20260615-clean.csv
+35,ch5_6m8_plen128,ok,firmware_smooth,24535,24535,100.00,409.56,0.6367,1.83,5.00,1.00,0,0,7.00,1.55,0.90,-64.0,-64.9,experiments/uwb-rf-35-ch5_6m8_plen128-20260615-clean.csv
+36,ch9_6m8_plen128,ok,raw,24268,24268,100.00,405.09,0.5490,5.04,18.00,18.00,251,0,4.32,4.56,6.17,-71.8,-78.0,experiments/uwb-rf-36-ch9_6m8_plen128-20260615-clean.csv
+36,ch9_6m8_plen128,ok,firmware_median5,24268,24268,100.00,405.09,0.5483,4.46,17.00,8.00,0,0,4.32,4.56,6.17,-71.8,-78.0,experiments/uwb-rf-36-ch9_6m8_plen128-20260615-clean.csv
+36,ch9_6m8_plen128,ok,firmware_smooth,24268,24268,100.00,405.09,0.5502,4.23,16.00,1.00,0,0,4.32,4.56,6.17,-71.8,-78.0,experiments/uwb-rf-36-ch9_6m8_plen128-20260615-clean.csv
+40,ch5_850k_plen1024,no_samples_after_switch,raw,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,nan,nan,experiments/uwb-rf-40-ch5_850k_plen1024-20260615-clean.csv
+40,ch5_850k_plen1024,no_samples_after_switch,firmware_median5,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,nan,nan,experiments/uwb-rf-40-ch5_850k_plen1024-20260615-clean.csv
+40,ch5_850k_plen1024,no_samples_after_switch,firmware_smooth,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,nan,nan,experiments/uwb-rf-40-ch5_850k_plen1024-20260615-clean.csv

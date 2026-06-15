@@ -28,6 +28,9 @@
 #define POLL_MSG_TEST_PROFILE_IDX 20
 #define POLL_MSG_RANGING_MODE_IDX 21
 #define POLL_MSG_FIRE_IDX         22
+#define POLL_MSG_GYRO_X_IDX       23
+#define POLL_MSG_GYRO_Y_IDX       25
+#define POLL_MSG_GYRO_Z_IDX       27
 
 #define RESP_MSG_CTRL_OPT_IDX         11
 #define RESP_MSG_CTRL_TOKEN_IDX       12
@@ -40,6 +43,9 @@
 #define RESP_MSG_ACCEL_X_IDX          25
 #define RESP_MSG_ACCEL_Y_IDX          27
 #define RESP_MSG_ACCEL_Z_IDX          29
+#define RESP_MSG_GYRO_X_IDX           31
+#define RESP_MSG_GYRO_Y_IDX           33
+#define RESP_MSG_GYRO_Z_IDX           35
 
 #define RESP_FLAG_SWITCH_PENDING 0x01u
 #define RESP_FLAG_ACQ_PENDING    0x02u
@@ -53,10 +59,16 @@ static uint8_t rx_poll_msg[] = {
     FUNC_CODE_POLL,
     0, 0,
     0, 0,
+    0, 0,
+    0, 0,
+    0, 0,
+    0, 0,
+    0, 0,
+    0, 0,
     0, 0
 };
 
-static uint8_t tx_resp_msg[] = {
+static uint8_t tx_resp_msg[RESP_MSG_GYRO_Z_IDX + 2u] = {
     0x41, 0x88,
     0,
     0xCA, 0xDE,
@@ -98,8 +110,10 @@ static double distance;
 static uint32_t ranging_count = 0;
 
 static int16_t accel_rx[3];
+static int16_t gyro_rx[3];
 
 static accel_data_t accel_local;
+static gyro_data_t gyro_local;
 static bool accel_ok = false;
 
 static uint8_t current_profile_opt = UWB_PROFILE_OPT_6M8_STABLE;
@@ -474,8 +488,8 @@ int ss_twr_responder_custom(void)
     pyro_trigger_init();
 #endif
 
-    test_run_info((unsigned char *)"# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt");
-    uart_log_write("# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt");
+    test_run_info((unsigned char *)"# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz");
+    uart_log_write("# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz");
 
     while (1)
     {
@@ -522,6 +536,19 @@ int ss_twr_responder_custom(void)
                               (rx_buffer[POLL_MSG_ACCEL_Y_IDX + 1] << 8));
                 accel_rx[2] = (int16_t)(rx_buffer[POLL_MSG_ACCEL_Z_IDX] |
                               (rx_buffer[POLL_MSG_ACCEL_Z_IDX + 1] << 8));
+
+                gyro_rx[0] = 0;
+                gyro_rx[1] = 0;
+                gyro_rx[2] = 0;
+                if (frame_len > POLL_MSG_GYRO_Z_IDX + 1)
+                {
+                    gyro_rx[0] = (int16_t)(rx_buffer[POLL_MSG_GYRO_X_IDX] |
+                                 (rx_buffer[POLL_MSG_GYRO_X_IDX + 1] << 8));
+                    gyro_rx[1] = (int16_t)(rx_buffer[POLL_MSG_GYRO_Y_IDX] |
+                                 (rx_buffer[POLL_MSG_GYRO_Y_IDX + 1] << 8));
+                    gyro_rx[2] = (int16_t)(rx_buffer[POLL_MSG_GYRO_Z_IDX] |
+                                 (rx_buffer[POLL_MSG_GYRO_Z_IDX + 1] << 8));
+                }
 
                 if (frame_len > POLL_MSG_ACQ_PERIOD_IDX)
                 {
@@ -612,6 +639,12 @@ int ss_twr_responder_custom(void)
                 tx_resp_msg[RESP_MSG_ACCEL_Y_IDX + 1] = (uint8_t)((accel_local.y >> 8) & 0xFF);
                 tx_resp_msg[RESP_MSG_ACCEL_Z_IDX] = (uint8_t)(accel_local.z & 0xFF);
                 tx_resp_msg[RESP_MSG_ACCEL_Z_IDX + 1] = (uint8_t)((accel_local.z >> 8) & 0xFF);
+                tx_resp_msg[RESP_MSG_GYRO_X_IDX] = (uint8_t)(gyro_local.x & 0xFF);
+                tx_resp_msg[RESP_MSG_GYRO_X_IDX + 1] = (uint8_t)((gyro_local.x >> 8) & 0xFF);
+                tx_resp_msg[RESP_MSG_GYRO_Y_IDX] = (uint8_t)(gyro_local.y & 0xFF);
+                tx_resp_msg[RESP_MSG_GYRO_Y_IDX + 1] = (uint8_t)((gyro_local.y >> 8) & 0xFF);
+                tx_resp_msg[RESP_MSG_GYRO_Z_IDX] = (uint8_t)(gyro_local.z & 0xFF);
+                tx_resp_msg[RESP_MSG_GYRO_Z_IDX + 1] = (uint8_t)((gyro_local.z >> 8) & 0xFF);
                 dwt_writetxdata(sizeof(tx_resp_msg), tx_resp_msg, 0);
                 dwt_writetxfctrl(sizeof(tx_resp_msg) + FCS_LEN, 0, 1);
 
@@ -629,6 +662,15 @@ int ss_twr_responder_custom(void)
                 if (accel_ok && !accel_read(&accel_local))
                 {
                     accel_ok = false;
+                    gyro_local.x = 0;
+                    gyro_local.y = 0;
+                    gyro_local.z = 0;
+                }
+                else if (accel_ok && !accel_read_gyro(&gyro_local))
+                {
+                    gyro_local.x = 0;
+                    gyro_local.y = 0;
+                    gyro_local.z = 0;
                 }
 
                 if (switch_after_final)
@@ -695,7 +737,19 @@ int ss_twr_responder_custom(void)
                                 responder_accel_sample_count++;
                                 if ((accel_decimation == 1u) || ((responder_accel_sample_count % accel_decimation) == 0u))
                                 {
-                                    accel_read(&accel_local);
+                                    if (!accel_read(&accel_local))
+                                    {
+                                        accel_ok = false;
+                                        gyro_local.x = 0;
+                                        gyro_local.y = 0;
+                                        gyro_local.z = 0;
+                                    }
+                                    else if (!accel_read_gyro(&gyro_local))
+                                    {
+                                        gyro_local.x = 0;
+                                        gyro_local.y = 0;
+                                        gyro_local.z = 0;
+                                    }
                                 }
                             }
                         }
@@ -706,7 +760,7 @@ int ss_twr_responder_custom(void)
                             radio_quality_read(&radio_quality);
 
                             snprintf(output_buf, sizeof(output_buf),
-                            "%lu,%lu,%.2f,%.1f,%.1f,%.2f,%u,%u,%.2f,%u,%d",
+                            "%lu,%lu,%.2f,%.1f,%.1f,%.2f,%u,%u,%.2f,%u,%d,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%d,%d,%d,%d,%d,%d",
                             (unsigned long)ms,
                             (unsigned long)ranging_count,
                             distance,
@@ -717,7 +771,23 @@ int ss_twr_responder_custom(void)
                             (unsigned int)radio_quality.nlos_score_10,
                             (double)radio_quality.peak_to_fp_samples,
                             (unsigned int)radio_quality.fp_conf_level,
-                            (int)radio_quality.sts_quality);
+                            (int)radio_quality.sts_quality,
+                            (int)accel_rx[0],
+                            (int)accel_rx[1],
+                            (int)accel_rx[2],
+                            (int)accel_local.x,
+                            (int)accel_local.y,
+                            (int)accel_local.z,
+                            (unsigned int)current_acq_period_ms,
+                            (unsigned int)last_initiator_acq_period_ms,
+                            (unsigned int)current_profile_opt,
+                            (unsigned int)last_initiator_profile_opt,
+                            (int)gyro_rx[0],
+                            (int)gyro_rx[1],
+                            (int)gyro_rx[2],
+                            (int)gyro_local.x,
+                            (int)gyro_local.y,
+                            (int)gyro_local.z);
                         }
                         uart_log_write(output_buf);
 

@@ -47,9 +47,15 @@ class Columns:
     rax: str | None
     ray: str | None
     raz: str | None
-    gx: str | None
-    gy: str | None
-    gz: str | None
+    igx: str | None
+    igy: str | None
+    igz: str | None
+    rgx: str | None
+    rgy: str | None
+    rgz: str | None
+    tgx: str | None
+    tgy: str | None
+    tgz: str | None
     speed: str | None
     lat: str | None
     lon: str | None
@@ -127,9 +133,15 @@ def detect_columns(df: pd.DataFrame) -> Columns:
         rax=_pick(df, ["rax", "resp_ax", "accel_r_x"]),
         ray=_pick(df, ["ray", "resp_ay", "accel_r_y"]),
         raz=_pick(df, ["raz", "resp_az", "accel_r_z"]),
-        gx=_pick(df, ["phone_gx", "gyro_x", "gx"]),
-        gy=_pick(df, ["phone_gy", "gyro_y", "gy"]),
-        gz=_pick(df, ["phone_gz", "gyro_z", "gz"]),
+        igx=_pick(df, ["igx", "init_gx", "gyro_i_x"]),
+        igy=_pick(df, ["igy", "init_gy", "gyro_i_y"]),
+        igz=_pick(df, ["igz", "init_gz", "gyro_i_z"]),
+        rgx=_pick(df, ["rgx", "resp_gx", "gyro_r_x"]),
+        rgy=_pick(df, ["rgy", "resp_gy", "gyro_r_y"]),
+        rgz=_pick(df, ["rgz", "resp_gz", "gyro_r_z"]),
+        tgx=_pick(df, ["tgx", "phone_gx", "gyro_x", "gx"]),
+        tgy=_pick(df, ["tgy", "phone_gy", "gyro_y", "gy"]),
+        tgz=_pick(df, ["tgz", "phone_gz", "gyro_z", "gz"]),
         speed=_pick(df, ["phone_speed_mps", "gps_speed_mps", "speed_mps", "speed"]),
         lat=_pick(df, ["phone_lat", "lat", "latitude"]),
         lon=_pick(df, ["phone_lon", "lon", "longitude"]),
@@ -760,6 +772,170 @@ def compute_fast_instability(
     return metrics, details
 
 
+def robust_activity_component(series: pd.Series) -> pd.Series:
+    vals = pd.to_numeric(series, errors="coerce").astype("float64")
+    median = float(vals.median()) if vals.notna().any() else np.nan
+    mad = float((vals - median).abs().median()) if vals.notna().any() else np.nan
+    if not np.isfinite(mad) or mad <= 1e-9:
+        q90 = float(vals.quantile(0.90)) if vals.notna().any() else np.nan
+        q10 = float(vals.quantile(0.10)) if vals.notna().any() else np.nan
+        mad = (q90 - q10) / 2.56 if np.isfinite(q90) and np.isfinite(q10) and q90 > q10 else np.nan
+    if not np.isfinite(mad) or mad <= 1e-9:
+        return pd.Series(0.0, index=vals.index)
+    return ((vals - median).abs() / (1.4826 * mad)).clip(lower=0.0, upper=20.0)
+
+
+def vector_norm(df: pd.DataFrame, cols: list[str]) -> pd.Series:
+    values = [pd.to_numeric(df[col], errors="coerce").astype("float64") for col in cols]
+    total = pd.Series(0.0, index=df.index)
+    valid = pd.Series(True, index=df.index)
+    for value in values:
+        total += value.pow(2)
+        valid &= value.notna()
+    return np.sqrt(total).where(valid)
+
+
+def compute_imu_activity(
+    df: pd.DataFrame,
+    x: pd.Series,
+    *,
+    accel_cols: list[str],
+    gyro_cols: list[str],
+    window_s: float,
+) -> pd.DataFrame:
+    parts: list[pd.Series] = []
+    t = pd.to_numeric(x, errors="coerce").astype("float64")
+    dt = t.diff().replace(0.0, np.nan)
+
+    if accel_cols and all(col in df.columns for col in accel_cols):
+        accel_norm = vector_norm(df, accel_cols)
+        accel_delta = accel_norm.diff().abs() / dt
+        parts.append(robust_activity_component(accel_delta))
+
+    if gyro_cols and all(col in df.columns for col in gyro_cols):
+        gyro_norm = vector_norm(df, gyro_cols)
+        parts.append(robust_activity_component(gyro_norm))
+
+    if not parts:
+        return pd.DataFrame(index=df.index)
+
+    raw_score = pd.concat(parts, axis=1).mean(axis=1)
+    window = rolling_samples_for_seconds(x, max(0.2, float(window_s)))
+    smooth_score = raw_score.rolling(window, center=True, min_periods=max(3, window // 3)).median().fillna(raw_score).clip(lower=0.0, upper=20.0)
+
+    valid = smooth_score[smooth_score.notna()]
+    if valid.empty:
+        low_threshold = high_threshold = np.nan
+    else:
+        low_threshold = float(valid.quantile(0.40))
+        high_threshold = float(valid.quantile(0.75))
+        if np.isclose(low_threshold, high_threshold):
+            high_threshold = float(valid.quantile(0.90))
+
+    state = pd.Series("unknown", index=df.index, dtype="object")
+    if np.isfinite(low_threshold) and np.isfinite(high_threshold) and high_threshold > low_threshold:
+        state.loc[smooth_score <= low_threshold] = "quiet"
+        state.loc[(smooth_score > low_threshold) & (smooth_score < high_threshold)] = "active"
+        state.loc[smooth_score >= high_threshold] = "very_active"
+    elif valid.notna().any():
+        state.loc[smooth_score.notna()] = "active"
+
+    return pd.DataFrame(
+        {
+            "activity_score": smooth_score,
+            "activity_state": state,
+            "low_threshold": low_threshold,
+            "high_threshold": high_threshold,
+        },
+        index=df.index,
+    )
+
+
+def plot_imu_activity_vs_distance(
+    work: pd.DataFrame,
+    x: pd.Series,
+    dist_col: str,
+    fast_details: pd.DataFrame,
+    activity_by_source: dict[str, pd.DataFrame],
+) -> None:
+    if not activity_by_source:
+        st.info("No IMU columns found for activity classification.")
+        return
+
+    aligned = pd.DataFrame(index=work.index)
+    fig = go.Figure()
+    colors = ["#2f7ed8", "#8bbc21", "#7b3294"]
+    for idx, (source_name, activity) in enumerate(activity_by_source.items()):
+        score_col = f"{source_name} score"
+        state_col = f"{source_name} state"
+        aligned[score_col] = pd.to_numeric(activity["activity_score"], errors="coerce")
+        aligned[state_col] = activity["activity_state"]
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=aligned[score_col],
+                mode="lines",
+                name=source_name,
+                line=dict(width=2.0, color=colors[idx % len(colors)]),
+                yaxis="y1",
+            )
+        )
+
+    very_active_cols = [col for col in aligned.columns if col.endswith(" state")]
+    any_very_active = pd.Series(False, index=work.index)
+    any_active = pd.Series(False, index=work.index)
+    for col in very_active_cols:
+        any_very_active |= aligned[col].eq("very_active")
+        any_active |= aligned[col].isin(["active", "very_active"])
+
+    spike_mask = fast_details["bad_dynamic_point"].fillna(False).astype(bool) if "bad_dynamic_point" in fast_details else pd.Series(False, index=work.index)
+    plausible_spike = spike_mask & any_very_active
+    suspect_spike = spike_mask & ~any_active
+    ambiguous_spike = spike_mask & ~(plausible_spike | suspect_spike)
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=pd.to_numeric(work[dist_col], errors="coerce"),
+            mode="lines",
+            name=dist_col,
+            line=dict(width=2.0, color="#f45b5b"),
+            yaxis="y2",
+        )
+    )
+
+    marker_y = pd.Series(0.0, index=work.index)
+    if plausible_spike.any():
+        fig.add_trace(go.Scatter(x=x[plausible_spike], y=marker_y[plausible_spike], mode="markers", name="distance spike during very active IMU", marker=dict(size=8, color="#2ca02c", symbol="circle"), yaxis="y1"))
+    if ambiguous_spike.any():
+        fig.add_trace(go.Scatter(x=x[ambiguous_spike], y=marker_y[ambiguous_spike], mode="markers", name="distance spike during moderate IMU", marker=dict(size=8, color="#ff7f0e", symbol="diamond"), yaxis="y1"))
+    if suspect_spike.any():
+        fig.add_trace(go.Scatter(x=x[suspect_spike], y=marker_y[suspect_spike], mode="markers", name="distance spike while IMU quiet", marker=dict(size=9, color="#d62728", symbol="x"), yaxis="y1"))
+
+    fig.update_layout(
+        height=360,
+        margin=dict(l=30, r=30, t=40, b=30),
+        xaxis_title="time (s)",
+        yaxis=dict(title="relative IMU energy"),
+        yaxis2=dict(title="raw distance (m)", overlaying="y", side="right"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    spike_count = int(spike_mask.sum())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Distance spikes", f"{spike_count}")
+    c2.metric("Motion-plausible", f"{int(plausible_spike.sum())}")
+    c3.metric("Ambiguous", f"{int(ambiguous_spike.sum())}")
+    c4.metric("Suspicious quiet", f"{int(suspect_spike.sum())}")
+
+    if spike_count > 0:
+        suspicious_ratio = float(suspect_spike.sum() * 100.0 / spike_count)
+        st.caption(f"Rule of thumb: a raw-distance spike while rider/horse IMU energy is quiet is suspicious. Here, {suspicious_ratio:.1f}% of flagged distance spikes happen in quiet IMU windows.")
+    else:
+        st.caption("No distance spikes were flagged by the current Fast Instability thresholds.")
+
+
 def _first_value(df: pd.DataFrame, col: str | None) -> object:
     if col is None or col not in df.columns:
         return ""
@@ -1076,7 +1252,7 @@ def app() -> None:
         downsample = st.slider("Downsample", min_value=1, max_value=20, value=1, step=1)
         roll_win = st.slider("Rolling mean window", min_value=1, max_value=200, value=1, step=1)
         st.header("Distance cleanup")
-        filter_spikes = st.checkbox("Filter display spikes", value=True)
+        filter_spikes = st.checkbox("Use cleaned distance for display", value=False)
         max_abs_m = st.number_input("Hard distance limit |m|", min_value=0.0, max_value=100000.0, value=20.0, step=1.0)
         hampel_window = st.slider("Local spike window", min_value=3, max_value=101, value=21, step=2)
         hampel_sigma = st.slider("Local spike sigma", min_value=2.0, max_value=12.0, value=6.0, step=0.5)
@@ -1089,6 +1265,7 @@ def app() -> None:
         improbable_speed_mps = st.number_input("Improbable speed threshold |m/s|", min_value=0.0, max_value=200.0, value=10.0, step=1.0)
         jump_distance_m = st.number_input("Jump distance threshold Δm", min_value=0.0, max_value=10.0, value=0.50, step=0.05)
         local_instability_window_s = st.number_input("Local instability window (s)", min_value=0.2, max_value=10.0, value=2.0, step=0.2)
+        imu_activity_window_s = st.number_input("IMU activity window (s)", min_value=0.2, max_value=10.0, value=1.0, step=0.2)
         show_raw_velocity = st.checkbox("Show raw velocity", value=False)
 
     if not uploaded_files and not path_txt.strip():
@@ -1491,6 +1668,38 @@ def app() -> None:
     st.plotly_chart(fig_fast, use_container_width=True)
     st.caption("À utiliser quand la standard deviation globale est proche: ces KPI mesurent les sauts point-à-point, la vitesse impossible, le jitter local et les rafales de mauvais points. Plus l'Instability index est élevé, plus le mode est instable.")
 
+    st.subheader("IMU Energy vs Raw Distance Spikes")
+    activity_sources: dict[str, pd.DataFrame] = {}
+    if all([cols.iax, cols.iay, cols.iaz]):
+        initiator_gyro_cols = [cols.igx, cols.igy, cols.igz] if all([cols.igx, cols.igy, cols.igz]) else []
+        activity_sources["Rider energy (initiator)"] = compute_imu_activity(
+            work,
+            x,
+            accel_cols=[cols.iax, cols.iay, cols.iaz],
+            gyro_cols=initiator_gyro_cols,
+            window_s=float(imu_activity_window_s),
+        )
+    if all([cols.rax, cols.ray, cols.raz]):
+        responder_gyro_cols = [cols.rgx, cols.rgy, cols.rgz] if all([cols.rgx, cols.rgy, cols.rgz]) else []
+        activity_sources["Horse energy (responder)"] = compute_imu_activity(
+            work,
+            x,
+            accel_cols=[cols.rax, cols.ray, cols.raz],
+            gyro_cols=responder_gyro_cols,
+            window_s=float(imu_activity_window_s),
+        )
+    if all([cols.tgx, cols.tgy, cols.tgz]):
+        activity_sources["Phone gyro energy"] = compute_imu_activity(
+            work,
+            x,
+            accel_cols=[],
+            gyro_cols=[cols.tgx, cols.tgy, cols.tgz],
+            window_s=float(imu_activity_window_s),
+        )
+    activity_sources = {name: activity for name, activity in activity_sources.items() if not activity.empty}
+    plot_imu_activity_vs_distance(work, x, dist_source_col, fast_details, activity_sources)
+    st.caption("Recommendation: use this block with raw distance. Quiet rider/horse energy + distance spike is a radio/timing suspect; very active rider or horse energy + distance spike is more plausibly motion, body masking, or orientation-related.")
+
     st.subheader("NLOS / CIR Diagnostics")
     nlos_cols = [c for c in [cols.nlos_quality, cols.peak_to_fp, cols.fp_conf, cols.sts_quality] if c and c in work.columns]
     if nlos_cols:
@@ -1661,9 +1870,17 @@ def app() -> None:
         st.info("Responder acceleration columns not found.")
 
     st.subheader("Gyroscope and Distance Overlay")
-    if all([cols.gx, cols.gy, cols.gz]):
-        dual_axis_plot(work, x, [cols.gx, cols.gy, cols.gz], dist_plot_col, "Phone gyro + distance")
-    else:
+    gyro_plots = 0
+    if all([cols.igx, cols.igy, cols.igz]):
+        dual_axis_plot(work, x, [cols.igx, cols.igy, cols.igz], dist_plot_col, "Initiator BMI gyro + distance")
+        gyro_plots += 1
+    if all([cols.rgx, cols.rgy, cols.rgz]):
+        dual_axis_plot(work, x, [cols.rgx, cols.rgy, cols.rgz], dist_plot_col, "Responder BMI gyro + distance")
+        gyro_plots += 1
+    if all([cols.tgx, cols.tgy, cols.tgz]):
+        dual_axis_plot(work, x, [cols.tgx, cols.tgy, cols.tgz], dist_plot_col, "Phone gyro + distance")
+        gyro_plots += 1
+    if gyro_plots == 0:
         st.info("Gyroscope columns not found in CSV.")
 
     st.subheader("GPS Speed and Distance Overlay")

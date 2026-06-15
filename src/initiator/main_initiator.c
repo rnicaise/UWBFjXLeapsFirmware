@@ -32,6 +32,7 @@
 
 #include "../common/ranging.h"
 #include "../common/uwb_profiles.h"
+#include "../common/radio_quality.h"
 #include "../accel/accel.h"
 #include "../board/pyro_buzzer.h"
 #include "../uart/uart_log.h"
@@ -43,6 +44,9 @@
 #define POLL_MSG_TEST_PROFILE_IDX 20
 #define POLL_MSG_RANGING_MODE_IDX 21
 #define POLL_MSG_FIRE_IDX         22
+#define POLL_MSG_GYRO_X_IDX       23
+#define POLL_MSG_GYRO_Y_IDX       25
+#define POLL_MSG_GYRO_Z_IDX       27
 
 #define RESP_MSG_CTRL_OPT_IDX   11
 #define RESP_MSG_CTRL_TOKEN_IDX 12
@@ -55,6 +59,9 @@
 #define RESP_MSG_ACCEL_X_IDX      25
 #define RESP_MSG_ACCEL_Y_IDX      27
 #define RESP_MSG_ACCEL_Z_IDX      29
+#define RESP_MSG_GYRO_X_IDX       31
+#define RESP_MSG_GYRO_Y_IDX       33
+#define RESP_MSG_GYRO_Z_IDX       35
 
 #define RESP_FLAG_SWITCH_PENDING 0x01u
 #define RESP_FLAG_ACQ_PENDING    0x02u
@@ -79,7 +86,10 @@ static uint8_t tx_poll_msg[] = {
     0,                    /* [19] period switch token */
     UWB_TEST_PROFILE_DEFAULT, /* [20] active safe test profile */
     1,                    /* [21] fixed ranging mode: SS-TWR */
-    0                     /* [22] fire relay flag to responder */
+    0,                    /* [22] fire relay flag to responder */
+    0, 0,                 /* [23-24] gyro X (int16 LE, raw LSB) */
+    0, 0,                 /* [25-26] gyro Y */
+    0, 0                  /* [27-28] gyro Z */
 };
 
 /* Response expected from responder */
@@ -123,6 +133,7 @@ static uint32_t ranging_count = 0;
 
 /* Accelerometer */
 static accel_data_t accel_data;
+static gyro_data_t gyro_data;
 static bool accel_ok = false;
 static uint32_t accel_retry_div = 0;
 static uint32_t accel_sample_count = 0;
@@ -135,6 +146,7 @@ static uint8_t active_test_profile = UWB_TEST_PROFILE_DEFAULT;
 static uint8_t current_profile_opt = UWB_PROFILE_OPT_6M8_STABLE;
 static uint8_t pending_profile_opt = UWB_PROFILE_OPT_6M8_STABLE;
 static uint8_t pending_switch_token = 0;
+static uint8_t next_switch_token = 1;
 static bool switch_request_armed = false;
 static uint8_t pending_acq_period_ms = RNG_DELAY_MS;
 static uint8_t pending_acq_token = 0;
@@ -142,8 +154,142 @@ static bool acq_request_armed = false;
 static uint8_t fire_request_frames_remaining = 0;
 
 static const uwb_runtime_profile_t *active_profile = NULL;
-static char output_buf[224];
+static char output_buf[288];
 static char cmd_buf[96];
+
+/* -- Physical plausibility gate --
+ * Rejects (flags) distance samples that are physically impossible for the
+ * rider/horse use case. Invalid samples are still logged with valid=0 so
+ * nothing is lost for analysis; consumers (app trigger logic) should only
+ * act on valid=1 samples. */
+#define GATE_MIN_DISTANCE_M    (-0.5f)
+#define GATE_MAX_DISTANCE_M    (100.0f)
+#define GATE_MAX_SPEED_MPS     (12.0f)
+#define GATE_MARGIN_M          (0.3f)
+#define GATE_RESYNC_REJECTS    (8u)
+
+static float gate_last_valid_distance_m = 0.0f;
+static uint32_t gate_last_valid_ms = 0;
+static bool gate_has_baseline = false;
+static uint8_t gate_consecutive_rejects = 0;
+
+/* Returns true when the sample is plausible. After GATE_RESYNC_REJECTS
+ * consecutive rejections the new level is accepted as baseline so the
+ * gate can never lock out a genuine fast change. */
+static bool gate_check_distance(float distance_m, uint32_t now_ms)
+{
+    float max_delta_m;
+    float delta_m;
+    uint32_t dt_ms;
+
+    if ((distance_m < GATE_MIN_DISTANCE_M) || (distance_m > GATE_MAX_DISTANCE_M))
+    {
+        return false;
+    }
+
+    if (!gate_has_baseline)
+    {
+        gate_last_valid_distance_m = distance_m;
+        gate_last_valid_ms = now_ms;
+        gate_has_baseline = true;
+        gate_consecutive_rejects = 0;
+        return true;
+    }
+
+    dt_ms = now_ms - gate_last_valid_ms;
+    max_delta_m = (GATE_MAX_SPEED_MPS * (float)dt_ms / 1000.0f) + GATE_MARGIN_M;
+    delta_m = distance_m - gate_last_valid_distance_m;
+    if (delta_m < 0.0f)
+    {
+        delta_m = -delta_m;
+    }
+
+    if (delta_m <= max_delta_m)
+    {
+        gate_last_valid_distance_m = distance_m;
+        gate_last_valid_ms = now_ms;
+        gate_consecutive_rejects = 0;
+        return true;
+    }
+
+    gate_consecutive_rejects++;
+    if (gate_consecutive_rejects >= GATE_RESYNC_REJECTS)
+    {
+        /* Persistent new level: re-baseline and accept. */
+        gate_last_valid_distance_m = distance_m;
+        gate_last_valid_ms = now_ms;
+        gate_consecutive_rejects = 0;
+        return true;
+    }
+
+    return false;
+}
+
+/* -- Median-of-5 filter on gate-valid distances --
+ * At ~390 Hz this adds only ~13 ms of latency while killing isolated
+ * spikes of 1-2 samples. Invalid samples never enter the window, so a
+ * burst of NLOS outliers cannot drag the filtered output. */
+#define MEDIAN_FILTER_LEN 5u
+
+static float median_buf[MEDIAN_FILTER_LEN];
+static uint8_t median_count = 0;
+static uint8_t median_head = 0;
+static bool smooth_has_baseline = false;
+static float smooth_distance_m = 0.0f;
+
+static float median_filter_push(float distance_m)
+{
+    float sorted[MEDIAN_FILTER_LEN];
+    uint8_t i;
+    uint8_t j;
+
+    median_buf[median_head] = distance_m;
+    median_head = (uint8_t)((median_head + 1u) % MEDIAN_FILTER_LEN);
+    if (median_count < MEDIAN_FILTER_LEN)
+    {
+        median_count++;
+    }
+
+    for (i = 0; i < median_count; i++)
+    {
+        float v = median_buf[i];
+        j = i;
+        while ((j > 0u) && (sorted[j - 1u] > v))
+        {
+            sorted[j] = sorted[j - 1u];
+            j--;
+        }
+        sorted[j] = v;
+    }
+
+    return sorted[median_count / 2u];
+}
+
+static float smooth_filter_push(float distance_m, bool valid)
+{
+    const float innovation_gate_m = 0.12f;
+    const float alpha = 0.05f;
+
+    if (!valid)
+    {
+        return smooth_distance_m;
+    }
+
+    if (!smooth_has_baseline)
+    {
+        smooth_distance_m = distance_m;
+        smooth_has_baseline = true;
+        return smooth_distance_m;
+    }
+
+    if ((distance_m >= (smooth_distance_m - innovation_gate_m)) &&
+        (distance_m <= (smooth_distance_m + innovation_gate_m)))
+    {
+        smooth_distance_m = smooth_distance_m + (alpha * (distance_m - smooth_distance_m));
+    }
+
+    return smooth_distance_m;
+}
 
 /* -- UWB config (from SDK) -- */
 extern dwt_config_t config_options;
@@ -212,6 +358,48 @@ static char *append_i32(char *dst, int32_t value)
     return append_u32(dst, magnitude);
 }
 
+/* Append a fixed-point value: scaled = value * 10^decimals (rounded). */
+static char *append_fixed(char *dst, int32_t scaled, uint8_t decimals)
+{
+    uint32_t magnitude;
+    uint32_t div = 1;
+    uint32_t frac;
+    uint8_t i;
+
+    for (i = 0; i < decimals; i++)
+    {
+        div *= 10u;
+    }
+
+    if (scaled < 0)
+    {
+        *dst++ = '-';
+        magnitude = (uint32_t)(-scaled);
+    }
+    else
+    {
+        magnitude = (uint32_t)scaled;
+    }
+
+    dst = append_u32(dst, magnitude / div);
+    *dst++ = '.';
+    frac = magnitude % div;
+    div /= 10u;
+    while (div > 0u)
+    {
+        *dst++ = (char)('0' + ((frac / div) % 10u));
+        div /= 10u;
+    }
+
+    return dst;
+}
+
+static int32_t float_scaled(float value, float scale)
+{
+    float scaled = value * scale;
+    return (int32_t)(scaled + ((scaled >= 0.0f) ? 0.5f : -0.5f));
+}
+
 static char *append_distance_cm(char *dst, int32_t distance_cm)
 {
     uint32_t magnitude;
@@ -237,8 +425,12 @@ static char *append_distance_cm(char *dst, int32_t distance_cm)
 }
 
 static void write_distance_csv(uint32_t ms, uint32_t sample, float distance_m,
+                               const radio_quality_t *radio_quality,
                                const accel_data_t *initiator_accel,
-                               const int16_t responder_accel[3])
+                               const int16_t responder_accel[3],
+                               const gyro_data_t *initiator_gyro,
+                               const int16_t responder_gyro[3],
+                               bool valid, float distance_filt_m, float distance_smooth_m)
 {
     char *dst = output_buf;
     float distance_cm_f = distance_m * 100.0f;
@@ -249,6 +441,22 @@ static void write_distance_csv(uint32_t ms, uint32_t sample, float distance_m,
     dst = append_u32(dst, sample);
     *dst++ = ',';
     dst = append_distance_cm(dst, distance_cm);
+    *dst++ = ',';
+    dst = append_fixed(dst, float_scaled(radio_quality->rx_power_dbm, 10.0f), 1);
+    *dst++ = ',';
+    dst = append_fixed(dst, float_scaled(radio_quality->fp_power_dbm, 10.0f), 1);
+    *dst++ = ',';
+    dst = append_fixed(dst, float_scaled(radio_quality->clock_offset_ppm, 100.0f), 2);
+    *dst++ = ',';
+    dst = append_u32(dst, radio_quality->score_10);
+    *dst++ = ',';
+    dst = append_u32(dst, radio_quality->nlos_score_10);
+    *dst++ = ',';
+    dst = append_fixed(dst, float_scaled(radio_quality->peak_to_fp_samples, 100.0f), 2);
+    *dst++ = ',';
+    dst = append_u32(dst, radio_quality->fp_conf_level);
+    *dst++ = ',';
+    dst = append_i32(dst, radio_quality->sts_quality);
     *dst++ = ',';
     dst = append_i32(dst, initiator_accel->x);
     *dst++ = ',';
@@ -261,6 +469,40 @@ static void write_distance_csv(uint32_t ms, uint32_t sample, float distance_m,
     dst = append_i32(dst, responder_accel[1]);
     *dst++ = ',';
     dst = append_i32(dst, responder_accel[2]);
+    *dst++ = ',';
+    dst = append_u32(dst, acquisition_period_ms);
+    *dst++ = ',';
+    dst = append_u32(dst, acquisition_period_ms);
+    *dst++ = ',';
+    dst = append_u32(dst, current_profile_opt);
+    *dst++ = ',';
+    dst = append_u32(dst, current_profile_opt);
+    *dst++ = ',';
+    dst = append_i32(dst, initiator_gyro->x);
+    *dst++ = ',';
+    dst = append_i32(dst, initiator_gyro->y);
+    *dst++ = ',';
+    dst = append_i32(dst, initiator_gyro->z);
+    *dst++ = ',';
+    dst = append_i32(dst, responder_gyro[0]);
+    *dst++ = ',';
+    dst = append_i32(dst, responder_gyro[1]);
+    *dst++ = ',';
+    dst = append_i32(dst, responder_gyro[2]);
+    *dst++ = ',';
+    dst = append_u32(dst, valid ? 1u : 0u);
+    *dst++ = ',';
+    {
+        float filt_cm_f = distance_filt_m * 100.0f;
+        int32_t filt_cm = (int32_t)(filt_cm_f + ((filt_cm_f >= 0.0f) ? 0.5f : -0.5f));
+        dst = append_distance_cm(dst, filt_cm);
+    }
+    *dst++ = ',';
+    {
+        float smooth_cm_f = distance_smooth_m * 100.0f;
+        int32_t smooth_cm = (int32_t)(smooth_cm_f + ((smooth_cm_f >= 0.0f) ? 0.5f : -0.5f));
+        dst = append_distance_cm(dst, smooth_cm);
+    }
     *dst = '\0';
 
     uart_log_write(output_buf);
@@ -281,7 +523,7 @@ static int apply_profile_option(uint8_t opt)
     {
         return DWT_ERROR;
     }
-    dwt_configciadiag((uint8_t)DW_CIA_DIAG_LOG_OFF);
+    radio_quality_enable_diagnostics();
 
     if (config_options.chan == 5)
     {
@@ -317,6 +559,82 @@ static void handle_app_command(const char *cmd)
     if ((strcmp(cmd, "CFG,GET_ROLE") == 0) || (strcmp(cmd, "INFO?") == 0))
     {
         uart_log_write("ROLE,INITIATOR");
+        return;
+    }
+
+    if (strcmp(cmd, "CFG,GET_PROFILE") == 0)
+    {
+        snprintf(output_buf, sizeof(output_buf), "PROFILE,%u", (unsigned int)current_profile_opt);
+        uart_log_write(output_buf);
+        return;
+    }
+
+    if (strncmp(cmd, "CFG,PROFILE,", 12) == 0)
+    {
+        uint8_t opt = (uint8_t)strtoul(cmd + 12, NULL, 10);
+        if (!is_supported_profile_opt(opt))
+        {
+            uart_log_write("ERR,UNSUPPORTED_PROFILE");
+            return;
+        }
+        if (opt == current_profile_opt)
+        {
+            switch_request_armed = false;
+            uart_log_write("ACK,PROFILE_ALREADY_ACTIVE");
+            return;
+        }
+        pending_profile_opt = opt;
+        pending_switch_token = next_switch_token++;
+        if (next_switch_token == 0u)
+        {
+            next_switch_token = 1u;
+        }
+        switch_request_armed = true;
+        snprintf(output_buf, sizeof(output_buf), "ACK,PROFILE_SWITCH_ARMED,%u", (unsigned int)opt);
+        uart_log_write(output_buf);
+        return;
+    }
+
+    if (strncmp(cmd, "CFG,CHANNEL,", 12) == 0)
+    {
+        uint8_t channel = (uint8_t)strtoul(cmd + 12, NULL, 10);
+        uint8_t opt = uwb_profile_opt_for_channel_rate_kbps(channel, 6800);
+        if ((channel != 5u) && (channel != 9u))
+        {
+            uart_log_write("ERR,UNSUPPORTED_CHANNEL");
+            return;
+        }
+        snprintf(output_buf, sizeof(output_buf), "ACK,CHANNEL_PROFILE,%u", (unsigned int)opt);
+        uart_log_write(output_buf);
+        pending_profile_opt = opt;
+        pending_switch_token = next_switch_token++;
+        if (next_switch_token == 0u)
+        {
+            next_switch_token = 1u;
+        }
+        switch_request_armed = (opt != current_profile_opt);
+        return;
+    }
+
+    if (strncmp(cmd, "CFG,RATE,", 9) == 0)
+    {
+        int rate_kbps = atoi(cmd + 9);
+        uint8_t channel = uwb_profile_channel_for_opt(current_profile_opt);
+        uint8_t opt = uwb_profile_opt_for_channel_rate_kbps(channel, rate_kbps);
+        if ((rate_kbps != 6800) && (rate_kbps != 850))
+        {
+            uart_log_write("ERR,UNSUPPORTED_RATE");
+            return;
+        }
+        snprintf(output_buf, sizeof(output_buf), "ACK,RATE_PROFILE,%u", (unsigned int)opt);
+        uart_log_write(output_buf);
+        pending_profile_opt = opt;
+        pending_switch_token = next_switch_token++;
+        if (next_switch_token == 0u)
+        {
+            next_switch_token = 1u;
+        }
+        switch_request_armed = (opt != current_profile_opt);
         return;
     }
 
@@ -372,7 +690,7 @@ int ss_twr_initiator_custom(void)
         test_run_info((unsigned char *)"CONFIG FAILED");
         while (1) { };
     }
-    dwt_configciadiag((uint8_t)DW_CIA_DIAG_LOG_OFF);
+    radio_quality_enable_diagnostics();
 
     /* Configure TX power based on channel */
     if (config_options.chan == 5)
@@ -413,7 +731,7 @@ int ss_twr_initiator_custom(void)
 
     /* CSV header on UART */
     test_run_info((unsigned char *)"# sample,distance_m,poll_tx,resp_rx,final_tx");
-    uart_log_write("# ms,sample,dist,iax,iay,iaz,rax,ray,raz");
+    uart_log_write("# ms,sample,dist,rx_power,fp_power,clock_ppm,score,nlos,peak_fp,fp_conf,sts,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz,valid,dist_filt,dist_smooth");
 
     NRF_RTC2->PRESCALER = 0;
     NRF_RTC2->TASKS_START = 1;
@@ -433,6 +751,9 @@ int ss_twr_initiator_custom(void)
             accel_data.x = 0;
             accel_data.y = 0;
             accel_data.z = 0;
+            gyro_data.x = 0;
+            gyro_data.y = 0;
+            gyro_data.z = 0;
         }
         else if (!accel_ok)
         {
@@ -454,6 +775,15 @@ int ss_twr_initiator_custom(void)
                 if (!accel_read(&accel_data))
                 {
                     accel_ok = false;
+                    gyro_data.x = 0;
+                    gyro_data.y = 0;
+                    gyro_data.z = 0;
+                }
+                else if (!accel_read_gyro(&gyro_data))
+                {
+                    gyro_data.x = 0;
+                    gyro_data.y = 0;
+                    gyro_data.z = 0;
                 }
             }
         }
@@ -472,6 +802,12 @@ int ss_twr_initiator_custom(void)
         tx_poll_msg[POLL_MSG_TEST_PROFILE_IDX] = active_test_profile;
         tx_poll_msg[POLL_MSG_RANGING_MODE_IDX] = RANGING_MODE_SS_TWR;
         tx_poll_msg[POLL_MSG_FIRE_IDX] = (fire_request_frames_remaining > 0u) ? 1u : 0u;
+        tx_poll_msg[POLL_MSG_GYRO_X_IDX]      = (uint8_t)(gyro_data.x & 0xFF);
+        tx_poll_msg[POLL_MSG_GYRO_X_IDX + 1]  = (uint8_t)((gyro_data.x >> 8) & 0xFF);
+        tx_poll_msg[POLL_MSG_GYRO_Y_IDX]      = (uint8_t)(gyro_data.y & 0xFF);
+        tx_poll_msg[POLL_MSG_GYRO_Y_IDX + 1]  = (uint8_t)((gyro_data.y >> 8) & 0xFF);
+        tx_poll_msg[POLL_MSG_GYRO_Z_IDX]      = (uint8_t)(gyro_data.z & 0xFF);
+        tx_poll_msg[POLL_MSG_GYRO_Z_IDX + 1]  = (uint8_t)((gyro_data.z >> 8) & 0xFF);
         if (fire_request_frames_remaining > 0u)
         {
             fire_request_frames_remaining--;
@@ -581,6 +917,7 @@ int ss_twr_initiator_custom(void)
                         float tof_dtu;
                         uint32_t ms;
                         int16_t responder_accel[3] = { 0, 0, 0 };
+                        int16_t responder_gyro[3] = { 0, 0, 0 };
 
                         ranging_msg_get_ts(&rx_buffer[RESP_MSG_SS_POLL_RX_TS_IDX], &responder_poll_rx_ts);
                         ranging_msg_get_ts(&rx_buffer[RESP_MSG_SS_RESP_TX_TS_IDX], &responder_resp_tx_ts);
@@ -594,6 +931,15 @@ int ss_twr_initiator_custom(void)
                             responder_accel[2] = (int16_t)(rx_buffer[RESP_MSG_ACCEL_Z_IDX] |
                                                   (rx_buffer[RESP_MSG_ACCEL_Z_IDX + 1] << 8));
                         }
+                        if (frame_len > RESP_MSG_GYRO_Z_IDX + 1)
+                        {
+                            responder_gyro[0] = (int16_t)(rx_buffer[RESP_MSG_GYRO_X_IDX] |
+                                                 (rx_buffer[RESP_MSG_GYRO_X_IDX + 1] << 8));
+                            responder_gyro[1] = (int16_t)(rx_buffer[RESP_MSG_GYRO_Y_IDX] |
+                                                 (rx_buffer[RESP_MSG_GYRO_Y_IDX + 1] << 8));
+                            responder_gyro[2] = (int16_t)(rx_buffer[RESP_MSG_GYRO_Z_IDX] |
+                                                 (rx_buffer[RESP_MSG_GYRO_Z_IDX + 1] << 8));
+                        }
                         rtd_init = resp_rx_ts_32 - poll_tx_ts_32;
                         reply_resp = responder_resp_tx_ts - responder_poll_rx_ts;
                         clock_offset_ratio = (float)dwt_readclockoffset() * (float)CLOCK_OFFSET_PPM_TO_RATIO;
@@ -603,7 +949,28 @@ int ss_twr_initiator_custom(void)
                         ranging_count++;
 
                         ms = (uint32_t)(((uint64_t)NRF_RTC2->COUNTER * 1000u) / 32768u);
-                        write_distance_csv(ms, ranging_count, distance, &accel_data, responder_accel);
+
+                        {
+                            radio_quality_t radio_quality;
+                            bool valid;
+                            static float last_filt = 0.0f;
+                            float dist_filt;
+                            float dist_smooth;
+
+                            radio_quality_read(&radio_quality);
+                            valid = gate_check_distance(distance, ms);
+
+                            if (valid)
+                            {
+                                last_filt = median_filter_push(distance);
+                            }
+                            dist_filt = last_filt;
+                            dist_smooth = smooth_filter_push(dist_filt, valid);
+
+                            write_distance_csv(ms, ranging_count, distance, &radio_quality,
+                                               &accel_data, responder_accel, &gyro_data, responder_gyro,
+                                               valid, dist_filt, dist_smooth);
+                        }
 
                         if (switch_request_armed && (pending_switch_token != 0u) && (tx_poll_msg[POLL_MSG_SWITCH_TOKEN_IDX] == pending_switch_token))
                         {

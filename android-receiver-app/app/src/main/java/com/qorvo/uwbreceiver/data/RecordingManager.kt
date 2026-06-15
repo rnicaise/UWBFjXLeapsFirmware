@@ -40,7 +40,7 @@ class RecordingManager(private val context: Context) {
             ?: error("Unable to open output stream")
 
         writer = BufferedWriter(OutputStreamWriter(output)).apply {
-            appendLine("ms,sample,dist_raw,dist_filt,bike_box_position,vest_box_position,app_preset,app_test_profile,app_ranging_mode,app_rf_channel,app_uwb_data_rate_kbps,app_acq_period_ms,app_median_window,connected_role,link_reliability_10,stability_quality_10,smoothness_quality_10,timing_quality_10,dropout_quality_10,valid_rate_5s,jump_rate_5s,bad_burst_max,nlos_quality_10,rolling_std_5s_m,relative_speed_mps,instant_hz,timing_anomaly_rate,rx_power_dbm,fp_power_dbm,clock_offset_ppm,rx_quality_10,path_quality_10,multipath_quality_10,clock_quality_10,signal_quality_10,peak_to_fp_samples,fp_conf_level,sts_quality,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,phone_gx,phone_gy,phone_gz,phone_lat,phone_lon,phone_alt_m,phone_speed_mps,phone_fix_elapsed_ms")
+            appendLine("ms,sample,dist_raw,dist_filt,bike_box_position,vest_box_position,app_preset,app_test_profile,app_ranging_mode,app_rf_channel,app_uwb_data_rate_kbps,app_acq_period_ms,app_median_window,connected_role,link_reliability_10,stability_quality_10,smoothness_quality_10,timing_quality_10,dropout_quality_10,valid_rate_5s,jump_rate_5s,bad_burst_max,nlos_quality_10,rolling_std_5s_m,relative_speed_mps,instant_hz,timing_anomaly_rate,rx_power_dbm,fp_power_dbm,clock_offset_ppm,rx_quality_10,path_quality_10,multipath_quality_10,clock_quality_10,signal_quality_10,peak_to_fp_samples,fp_conf_level,sts_quality,iax,iay,iaz,rax,ray,raz,igx,igy,igz,rgx,rgy,rgz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,tgx,tgy,tgz,phone_lat,phone_lon,phone_alt_m,phone_speed_mps,phone_fix_elapsed_ms,fw_valid,fw_dist_filt")
             flush()
         }
         currentUri = uri
@@ -154,6 +154,18 @@ class RecordingManager(private val context: Context) {
             append(',')
             append(sample.raz)
             append(',')
+            append(sample.igx)
+            append(',')
+            append(sample.igy)
+            append(',')
+            append(sample.igz)
+            append(',')
+            append(sample.rgx)
+            append(',')
+            append(sample.rgy)
+            append(',')
+            append(sample.rgz)
+            append(',')
             append(sample.responderAcquisitionPeriodMs?.toString() ?: "")
             append(',')
             append(sample.initiatorAcquisitionPeriodMs?.toString() ?: "")
@@ -177,6 +189,10 @@ class RecordingManager(private val context: Context) {
             append(phone.speedMps?.toString() ?: "")
             append(',')
             append(phone.fixElapsedMs?.toString() ?: "")
+            append(',')
+            append(sample.firmwareValid?.let { if (it) "1" else "0" } ?: "")
+            append(',')
+            append(sample.firmwareDistFilt?.toString() ?: "")
         })
         w.flush()
     }

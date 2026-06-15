@@ -84,6 +84,8 @@ class UwbForegroundService : Service() {
     private var connectedRole = ConnectedUwbRole.UNKNOWN
     private val distWindow = ArrayDeque<Float>()
     private var lastAcceptedSample: CsvSample? = null
+    private var lastUiPushElapsedMs = 0L
+    private var consecutivePlausibilityRejects = 0
 
     @Volatile
     private var latestGyroX: Float? = null
@@ -310,6 +312,7 @@ class UwbForegroundService : Service() {
         readJob = serviceScope.launch {
             val buffer = ByteArray(4096)
             val accumulator = StringBuilder()
+            var discardNextLine = false
 
             while (isActive && shouldConnect && activePort === port) {
                 val len = try {
@@ -329,6 +332,9 @@ class UwbForegroundService : Service() {
                 accumulator.append(chunk)
                 if (accumulator.length > MAX_ACCUMULATED_SERIAL_CHARS) {
                     accumulator.clear()
+                    /* We dropped mid-line: the next extracted "line" is a tail
+                     * fragment that must not reach the parser. */
+                    discardNextLine = true
                     RuntimeStore.onInvalidLine()
                     continue
                 }
@@ -337,7 +343,11 @@ class UwbForegroundService : Service() {
                 while (newlineIndex >= 0) {
                     val line = accumulator.substring(0, newlineIndex).trim('\r', '\n', ' ')
                     accumulator.delete(0, newlineIndex + 1)
-                    consumeLine(line)
+                    if (discardNextLine) {
+                        discardNextLine = false
+                    } else {
+                        consumeLine(line)
+                    }
                     newlineIndex = accumulator.indexOf("\n")
                 }
             }
@@ -384,12 +394,25 @@ class UwbForegroundService : Service() {
         }
 
         lastAcceptedSample = sample
+        consecutivePlausibilityRejects = 0
 
-        val filtered = filterDistance(sample.dist)
+        /* Prefer the firmware median-of-5 distance when present: spikes are
+         * already removed at the source with ~13 ms latency. The app median
+         * window (if > 1) is applied on top. */
+        val baseDist = sample.firmwareDistFilt ?: sample.dist
+        val filtered = filterDistance(baseDist, sample.firmwareValid != false)
         updateDistanceAlert(filtered)
         val phoneTelemetry = snapshotPhoneTelemetry()
 
-        RuntimeStore.onSample(sample, filtered, phoneTelemetry)
+        /* At ~390 Hz the per-sample stats/state pipeline (synchronized state
+         * copy + 30 s rolling std) cannot keep up and the USB buffer overruns,
+         * corrupting lines. Throttle UI/stats updates to ~20 Hz; recording
+         * still captures every sample. */
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
+        if (nowElapsed - lastUiPushElapsedMs >= UI_PUSH_INTERVAL_MS) {
+            lastUiPushElapsedMs = nowElapsed
+            RuntimeStore.onSample(sample, filtered, phoneTelemetry)
+        }
         recordingManager.appendEnrichedSample(
             sample,
             filtered,
@@ -401,8 +424,13 @@ class UwbForegroundService : Service() {
         )
     }
 
-    private fun filterDistance(rawDistance: Float): Float {
-        distWindow.addLast(rawDistance)
+    private fun filterDistance(rawDistance: Float, firmwareValid: Boolean = true): Float {
+        /* Samples flagged invalid by the firmware physical gate do not enter the
+         * display window: the last known-good median keeps being shown. Raw values
+         * are still recorded to CSV for analysis. */
+        if (firmwareValid) {
+            distWindow.addLast(rawDistance)
+        }
         while (distWindow.size > medianWindow.coerceAtLeast(1)) {
             distWindow.removeFirst()
         }
@@ -421,6 +449,9 @@ class UwbForegroundService : Service() {
     }
 
     private fun isPlausibleSample(sample: CsvSample): Boolean {
+        if (sample.ms < 0) {
+            return false
+        }
         if (!sample.dist.isFinite() || sample.dist < -5f || sample.dist > 30f) {
             return false
         }
@@ -428,11 +459,26 @@ class UwbForegroundService : Service() {
         val previous = lastAcceptedSample ?: return true
         val sampleDelta = sample.sample - previous.sample
         if (sampleDelta <= 0L) {
-            return false
+            return rebaselineAfterRejects()
         }
 
         val distanceDelta = kotlin.math.abs(sample.dist - previous.dist)
-        return !(sampleDelta <= 3L && distanceDelta > 5f)
+        if (sampleDelta <= 3L && distanceDelta > 5f) {
+            return rebaselineAfterRejects()
+        }
+        return true
+    }
+
+    /* If a corrupted line with a bogus (huge) sample counter ever gets accepted,
+     * every genuine sample afterwards fails the sampleDelta check and the display
+     * freezes. Accept after enough consecutive rejects to re-baseline. */
+    private fun rebaselineAfterRejects(): Boolean {
+        consecutivePlausibilityRejects++
+        if (consecutivePlausibilityRejects >= PLAUSIBILITY_RESYNC_REJECTS) {
+            consecutivePlausibilityRejects = 0
+            return true
+        }
+        return false
     }
 
     private fun snapshotPhoneTelemetry(): PhoneTelemetry {
@@ -668,7 +714,9 @@ class UwbForegroundService : Service() {
         private const val ALERT_BEEP_DURATION_MS = 250
         private const val ALERT_BEEP_PERIOD_MS = 300
         private const val SERIAL_BAUD_RATE = 460800
-        private const val MAX_ACCUMULATED_SERIAL_CHARS = 8192
+        private const val MAX_ACCUMULATED_SERIAL_CHARS = 65536
+        private const val UI_PUSH_INTERVAL_MS = 50L
+        private const val PLAUSIBILITY_RESYNC_REJECTS = 50
         private const val COMMAND_BYTE_DELAY_MS = 15L
 
         const val ACTION_CONNECT = "com.qorvo.uwbreceiver.action.CONNECT"

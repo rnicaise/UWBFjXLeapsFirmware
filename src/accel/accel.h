@@ -18,6 +18,13 @@ typedef struct {
     int16_t z;  /* mg */
 } accel_data_t;
 
+/* Gyroscope data in raw BMI323 LSB. Legacy builds report zeros. */
+typedef struct {
+    int16_t x;
+    int16_t y;
+    int16_t z;
+} gyro_data_t;
+
 #define ACCEL_BACKEND_CODE_NONE    0u
 #define ACCEL_BACKEND_CODE_LIS2DH12 1u
 #define ACCEL_BACKEND_CODE_BMI323   2u
@@ -27,6 +34,9 @@ bool accel_init(void);
 
 /* Read XYZ acceleration in mg. */
 bool accel_read(accel_data_t *data);
+
+/* Read XYZ gyroscope raw values. Returns false and zeros when unavailable. */
+bool accel_read_gyro(gyro_data_t *data);
 
 /* Human-readable active backend name for boot/debug logs. */
 const char *accel_backend_name(void);

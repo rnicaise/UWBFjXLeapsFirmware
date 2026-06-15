@@ -12,6 +12,12 @@ data class CsvSample(
     val rax: Int,
     val ray: Int,
     val raz: Int,
+    val igx: Int = 0,
+    val igy: Int = 0,
+    val igz: Int = 0,
+    val rgx: Int = 0,
+    val rgy: Int = 0,
+    val rgz: Int = 0,
     val rxPowerDbm: Float? = null,
     val firstPathPowerDbm: Float? = null,
     val clockOffsetPpm: Float? = null,
@@ -24,6 +30,8 @@ data class CsvSample(
     val initiatorAcquisitionPeriodMs: Int? = null,
     val responderProfileOpt: Int? = null,
     val initiatorProfileOpt: Int? = null,
+    val firmwareValid: Boolean? = null,
+    val firmwareDistFilt: Float? = null,
 )
 
 enum class LinkState {

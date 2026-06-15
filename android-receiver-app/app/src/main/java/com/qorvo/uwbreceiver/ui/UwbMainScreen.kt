@@ -141,11 +141,24 @@ fun UwbMainScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CardBlock(modifier = Modifier.weight(1f)) {
                     Text("Initiator accel", fontWeight = FontWeight.Bold)
-                    TripleValues(sample, true)
+                    AccelTripleValues(sample, true)
                 }
                 CardBlock(modifier = Modifier.weight(1f)) {
                     Text("Receiver accel", fontWeight = FontWeight.Bold)
-                    TripleValues(sample, false)
+                    AccelTripleValues(sample, false)
+                }
+            }
+        }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CardBlock(modifier = Modifier.weight(1f)) {
+                    Text("Initiator BMI gyro", fontWeight = FontWeight.Bold)
+                    GyroTripleValues(sample, true)
+                }
+                CardBlock(modifier = Modifier.weight(1f)) {
+                    Text("Receiver BMI gyro", fontWeight = FontWeight.Bold)
+                    GyroTripleValues(sample, false)
                 }
             }
         }
@@ -195,7 +208,7 @@ fun UwbMainScreen(
                 Text("Phone sensors", fontWeight = FontWeight.Bold)
                 val phone = state.runtime.phoneTelemetry
                 StatRow(
-                    "Gyro rad/s",
+                    "Phone gyro rad/s",
                     listOf(phone.gyroX, phone.gyroY, phone.gyroZ)
                         .joinToString(",") { v -> if (v == null) "--" else String.format("%.2f", v) }
                 )
@@ -326,10 +339,23 @@ private fun CardBlock(modifier: Modifier = Modifier, content: @Composable Column
 }
 
 @Composable
-private fun TripleValues(sample: CsvSample?, initiator: Boolean) {
+private fun AccelTripleValues(sample: CsvSample?, initiator: Boolean) {
     val x = if (initiator) sample?.iax else sample?.rax
     val y = if (initiator) sample?.iay else sample?.ray
     val z = if (initiator) sample?.iaz else sample?.raz
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("X: ${x ?: "--"}")
+        Text("Y: ${y ?: "--"}")
+        Text("Z: ${z ?: "--"}")
+    }
+}
+
+@Composable
+private fun GyroTripleValues(sample: CsvSample?, initiator: Boolean) {
+    val x = if (initiator) sample?.igx else sample?.rgx
+    val y = if (initiator) sample?.igy else sample?.rgy
+    val z = if (initiator) sample?.igz else sample?.rgz
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("X: ${x ?: "--"}")
