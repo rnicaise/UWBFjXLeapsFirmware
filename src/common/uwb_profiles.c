@@ -57,6 +57,87 @@ static const uwb_runtime_profile_t profiles[] = {
         .pre_timeout_symbols = PRE_TIMEOUT
     },
     {
+        .opt = UWB_PROFILE_OPT_6M8_PLEN256_CH5,
+        .data_rate_kbps = 6800,
+        .config = {
+            5,
+            DWT_PLEN_256,
+            DWT_PAC16,
+            9,
+            9,
+            1,
+            DWT_BR_6M8,
+            DWT_PHRMODE_STD,
+            DWT_PHRRATE_STD,
+            (256 + 1 + 8 - 16),
+            DWT_STS_MODE_OFF,
+            DWT_STS_LEN_64,
+            DWT_PDOA_M0
+        },
+        .initiator_poll_tx_to_resp_rx_dly_uus = POLL_TX_TO_RESP_RX_DLY_UUS,
+        .initiator_resp_rx_timeout_uus = RESP_RX_TIMEOUT_UUS,
+        .initiator_resp_rx_to_final_tx_dly_uus = RESP_RX_TO_FINAL_TX_DLY_UUS,
+        .responder_poll_rx_to_resp_tx_dly_uus = POLL_RX_TO_RESP_TX_DLY_UUS,
+        .responder_ss_poll_rx_to_resp_tx_dly_uus = SS_POLL_RX_TO_RESP_TX_DLY_UUS,
+        .responder_resp_tx_to_final_rx_dly_uus = RESP_TX_TO_FINAL_RX_DLY_UUS,
+        .responder_final_rx_timeout_uus = FINAL_RX_TIMEOUT_UUS,
+        .pre_timeout_symbols = 16
+    },
+    {
+        .opt = UWB_PROFILE_OPT_6M8_PLEN512_CH5,
+        .data_rate_kbps = 6800,
+        .config = {
+            5,
+            DWT_PLEN_512,
+            DWT_PAC32,
+            9,
+            9,
+            1,
+            DWT_BR_6M8,
+            DWT_PHRMODE_STD,
+            DWT_PHRRATE_STD,
+            (512 + 1 + 8 - 32),
+            DWT_STS_MODE_OFF,
+            DWT_STS_LEN_64,
+            DWT_PDOA_M0
+        },
+        .initiator_poll_tx_to_resp_rx_dly_uus = POLL_TX_TO_RESP_RX_DLY_UUS,
+        .initiator_resp_rx_timeout_uus = RESP_RX_TIMEOUT_UUS,
+        .initiator_resp_rx_to_final_tx_dly_uus = RESP_RX_TO_FINAL_TX_DLY_UUS,
+        .responder_poll_rx_to_resp_tx_dly_uus = POLL_RX_TO_RESP_TX_DLY_UUS,
+        .responder_ss_poll_rx_to_resp_tx_dly_uus = SS_POLL_RX_TO_RESP_TX_DLY_UUS,
+        .responder_resp_tx_to_final_rx_dly_uus = RESP_TX_TO_FINAL_RX_DLY_UUS,
+        .responder_final_rx_timeout_uus = FINAL_RX_TIMEOUT_UUS,
+        .pre_timeout_symbols = 32
+    },
+    {
+        .opt = UWB_PROFILE_OPT_6M8_PLEN1024_CH5,
+        .data_rate_kbps = 6800,
+        .config = {
+            5,
+            DWT_PLEN_1024,
+            DWT_PAC32,
+            9,
+            9,
+            1,
+            DWT_BR_6M8,
+            DWT_PHRMODE_STD,
+            DWT_PHRRATE_STD,
+            (1024 + 1 + 8 - 32),
+            DWT_STS_MODE_OFF,
+            DWT_STS_LEN_64,
+            DWT_PDOA_M0
+        },
+        .initiator_poll_tx_to_resp_rx_dly_uus = POLL_TX_TO_RESP_RX_DLY_UUS,
+        .initiator_resp_rx_timeout_uus = RESP_RX_TIMEOUT_UUS,
+        .initiator_resp_rx_to_final_tx_dly_uus = RESP_RX_TO_FINAL_TX_DLY_UUS,
+        .responder_poll_rx_to_resp_tx_dly_uus = POLL_RX_TO_RESP_TX_DLY_UUS,
+        .responder_ss_poll_rx_to_resp_tx_dly_uus = SS_POLL_RX_TO_RESP_TX_DLY_UUS,
+        .responder_resp_tx_to_final_rx_dly_uus = RESP_TX_TO_FINAL_RX_DLY_UUS,
+        .responder_final_rx_timeout_uus = FINAL_RX_TIMEOUT_UUS,
+        .pre_timeout_symbols = 64
+    },
+    {
         .opt = UWB_PROFILE_OPT_850K_ROBUST,
         .data_rate_kbps = 850,
         .config = {
@@ -125,4 +206,34 @@ uint8_t uwb_profile_channel_for_opt(uint8_t opt)
         return 5u;
     }
     return profile->config.chan;
+}
+
+int uwb_tx_power_level_is_supported(uint8_t level)
+{
+    return (level >= UWB_TX_POWER_LEVEL_MIN) && (level <= UWB_TX_POWER_LEVEL_MAX);
+}
+
+uint32_t uwb_tx_power_value_for_level(uint8_t channel, uint8_t level)
+{
+    static const uint32_t ch5_power_by_level[] = {
+        0x7f7f7f7ful,
+        0x9f9f9f9ful,
+        0xbfbfbfbful,
+        0xdfdfdfdful,
+        0xfdfdfdfdul
+    };
+    static const uint32_t ch9_power_by_level[] = {
+        0x7f7f7f7ful,
+        0x9f9f9f9ful,
+        0xbfbfbfbful,
+        0xdfdfdfdful,
+        0xfefefefeul
+    };
+
+    if (!uwb_tx_power_level_is_supported(level))
+    {
+        level = UWB_TX_POWER_LEVEL_DEFAULT;
+    }
+
+    return (channel == 9u) ? ch9_power_by_level[level] : ch5_power_by_level[level];
 }

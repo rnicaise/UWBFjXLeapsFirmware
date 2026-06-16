@@ -4,6 +4,14 @@ This repository builds firmware for DWM3001CDK-based UWB ranging boxes and an An
 
 The important current rule is: do not rely on runtime accelerometer auto-detection for field boxes. Build deterministic variants instead.
 
+## Product Context
+
+We are developing an embedded fall-detection system for equestrian airbag use. The goal is to measure the real-time relative distance between rider and horse using UWB (Ultra-Wideband), with a very high measurement rate around 100 Hz or more and minimal latency.
+
+These distance measurements are combined with accelerometer, gyroscope, and other inertial sensor data to detect fall situations as early as possible and trigger the airbag before impact. The main challenge is to obtain robust, reliable distance measurements despite fast movement, vibration, body masking, and the power constraints of a wearable system.
+
+See `docs/target.md` for the target product direction and the planned continuous motion-energy signals from UWB, accelerometer, and gyroscope data.
+
 ## Firmware Variants
 
 Variants are selected with CMake presets through `UWB_ROLE` and `UWB_ACCEL_TARGET`.
@@ -87,6 +95,21 @@ Follow-up after reconnecting the nRF/debug path later on 2026-06-15:
 
 Important firmware note: `src/uart/uart_log.c` now receives UART commands through a 64-byte EasyDMA RX buffer flushed from `uart_log_poll_rx()`. The previous one-byte polling RX could only handle slow character-by-character input; phone/host commands sent at full 460800 baud were corrupted or returned `ERR,READ_ONLY_SS_TWR`.
 
+## Android Armed Trigger Buttons
+
+The Android app has two one-shot armed trigger buttons in the Controls card:
+
+- `distance-armed-2m`: arms a distance trigger. On the first sample where the app display distance is at least 2.00 m, the phone buzzes, sends `PYRO,FIRE`, and immediately disarms.
+- `tilt-armed-50°`: captures the receiver accelerometer pitch/roll as the baseline at arm time. On the first sample where receiver pitch or roll differs by at least 50 degrees from that baseline, the phone buzzes, sends `PYRO,FIRE`, and immediately disarms.
+
+Implementation notes:
+
+- Actions are handled in `UwbForegroundService` as `ACTION_ARM_DISTANCE_2M` and `ACTION_ARM_TILT_50_DEG`.
+- The distance trigger uses `dist_smooth` when firmware provides it, then `dist_filt`, then raw `dist` as fallback.
+- The tilt trigger uses receiver accelerometer fields `rax/ray/raz`, not phone IMU orientation.
+- `RuntimeState.safetyArmMode` and `RuntimeState.safetyArmStatus` are displayed in Session status.
+- Manual `FIRE` remains available and still sends `PYRO,FIRE`.
+
 ## Static Precision Experiment (2026-06-15)
 
 Detailed radio-quality vocabulary, plateau interpretation, and filter assumptions are documented in `docs/quality-assumptions.md`.
@@ -138,6 +161,80 @@ Result at the current placement:
 - Opt 40, CH5 / 850K / PLEN1024: no samples after runtime switch. It likely needs dedicated timing/profile debugging before it can be used in SS-TWR sweep runs.
 
 Practical note: after trying opt 40, the system may need both boards reset/power-cycled to return to a working 35/35 baseline. After this sweep, the boards were switched back to 35/35 and live CSV was confirmed.
+
+### Preamble sweep from CH5 baseline
+
+Profiles added in `src/common/uwb_profiles.c` / `.h`:
+
+- Opt 37: CH5 / 6M8 / PLEN256 / PAC16.
+- Opt 38: CH5 / 6M8 / PLEN512 / PAC32.
+- Opt 39: CH5 / 6M8 / PLEN1024 / PAC32.
+
+Both initiator GenA and responder GenA were flashed with the updated profile table. Baseline was restored to 35/35 after the sweep.
+
+Clean sweep files:
+
+- `experiments/uwb-preamble-35-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-preamble-37-ch5_6m8_plen256_pac16-20260615.csv`
+- `experiments/uwb-preamble-38-ch5_6m8_plen512_pac32-20260615.csv`
+- `experiments/uwb-preamble-sweep-20260615-summary.csv`
+
+Result at the current placement:
+
+- Opt 35, PLEN128/PAC8: 24,776 samples, 413.6 Hz, 100 % valid. `dist_smooth`: mean 0.6045 m, std 0.68 cm, span95 2 cm, max jump 1 cm.
+- Opt 37, PLEN256/PAC16: 24,685 samples, 412.1 Hz, 100 % valid. `dist_smooth`: mean 0.5925 m, std 1.00 cm, span95 3 cm, max jump 1 cm.
+- Opt 38, PLEN512/PAC32: 3,717 samples, 62.1 Hz, 100 % valid. `dist_smooth`: mean 0.5764 m, std 0.83 cm, span95 3 cm, max jump 1 cm.
+- Opt 39, PLEN1024/PAC32: no samples after runtime switch.
+
+Practical conclusion: PLEN128/PAC8 remains the best high-rate profile here. PLEN256 did not improve stability, and PLEN512 costs too much rate. PLEN1024 needs timing/debug work before it can be evaluated.
+
+### TX power sweep from CH5 baseline
+
+Firmware support added after the preamble sweep:
+
+- `CFG,GET_TXPWR` on the initiator returns `TXPWR,<level>,<register>`.
+- `CFG,TXPWR,<0..4>` on the initiator applies a relative TX power register level.
+- The initiator writes the selected level into Poll byte 29; the responder follows it before transmitting Response.
+- The initiator resets gate/median/smooth filter state when TX power or runtime profile changes.
+
+Relative CH5 levels used by the sweep:
+
+| Level | TX_POWER register |
+| ---: | --- |
+| 0 | `0x7f7f7f7f` |
+| 1 | `0x9f9f9f9f` |
+| 2 | `0xbfbfbfbf` |
+| 3 | `0xdfdfdfdf` |
+| 4 | `0xfdfdfdfd` |
+
+Level 4 is the previous/current Qorvo CH5 default. These are relative register values, not calibrated dBm settings.
+
+Tooling:
+
+```sh
+./.venv/bin/python tools/uwb_tx_power_sweep.py --port /dev/cu.usbserial-0001 --baud 460800 --seconds 30 --settle-seconds 2 --levels 0,1,2,3,4
+```
+
+The tool confirms each level with `CFG,GET_TXPWR` before capture and restores level 4 at the end.
+
+Clean sweep files:
+
+- `experiments/uwb-txpower-l0-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-l1-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-l2-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-l3-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-l4-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-sweep-20260615-summary.csv`
+
+Result at the current placement, CH5 / 6M8 / PLEN128 / PAC8:
+
+- Level 0, `0x7f7f7f7f`: 12,338 samples, 386.1 Hz. Raw std 2.44 cm, span95 7 cm, 39 jumps >10 cm. `dist_smooth` std 0.70 cm, span95 2 cm, max jump 1 cm.
+- Level 1, `0x9f9f9f9f`: 12,337 samples, 386.1 Hz. Raw std 2.92 cm, span95 9 cm, 97 jumps >10 cm. `dist_smooth` std 1.47 cm, span95 3 cm, max jump 1 cm.
+- Level 2, `0xbfbfbfbf`: 12,335 samples, 386.0 Hz. Raw std 2.84 cm, span95 9 cm, 133 jumps >10 cm. `dist_smooth` std 0.90 cm, span95 3 cm, max jump 1 cm.
+- Level 3, `0xdfdfdfdf`: 12,337 samples, 386.1 Hz. Raw std 3.51 cm, span95 11 cm, 172 jumps >10 cm, 2 jumps >20 cm. `dist_smooth` std 1.48 cm, span95 4 cm, max jump 1 cm.
+- Level 4, `0xfdfdfdfd`: 12,326 samples, 385.8 Hz. Raw std 2.86 cm, span95 10 cm, 44 jumps >10 cm. `dist_smooth` std 1.19 cm, span95 3 cm, max jump 2 cm.
+
+Practical conclusion: in this short-range placement, the lowest tested TX power level 0 is best and does not reduce Hz. Retest level 0 vs level 4 at fixed 50 cm and 1 m before treating it as the new default.
 
 ## Accelerometer Pins
 

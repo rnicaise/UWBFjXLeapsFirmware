@@ -1,0 +1,4 @@
+opt,name,signal,samples,valid,valid_pct,hz,mean_m,std_cm,span95_cm,max_jump_cm,jumps_gt_10cm,jumps_gt_20cm,nlos_mean,peak_fp_mean,rx_fp_gap_mean,path
+35,ch5_6m8_plen128,raw,18427,18427,100.00,410.18,0.5048,2.59,8.00,17.00,153,0,5.01,3.90,4.56,experiments/uwb-rf-35-ch5_6m8_plen128-20260615.csv
+35,ch5_6m8_plen128,firmware_median5,18427,18427,100.00,410.18,0.5053,1.45,5.00,6.00,0,0,5.01,3.90,4.56,experiments/uwb-rf-35-ch5_6m8_plen128-20260615.csv
+35,ch5_6m8_plen128,firmware_smooth,18427,18427,100.00,410.18,0.5023,0.70,2.00,1.00,0,0,5.01,3.90,4.56,experiments/uwb-rf-35-ch5_6m8_plen128-20260615.csv

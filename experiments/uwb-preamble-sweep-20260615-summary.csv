@@ -1,0 +1,13 @@
+opt,name,state,signal,samples,valid,valid_pct,hz,mean_m,std_cm,span95_cm,max_jump_cm,jumps_gt_10cm,jumps_gt_20cm,nlos_mean,peak_fp_mean,rx_fp_gap_mean,rx_power_mean,fp_power_mean,path
+35,ch5_6m8_plen128_pac8,ok,raw,24776,24776,100.00,413.61,0.6051,2.94,9.00,17.00,345,0,6.99,1.60,0.73,-62.0,-62.8,experiments/uwb-preamble-35-ch5_6m8_plen128_pac8-20260615.csv
+35,ch5_6m8_plen128_pac8,ok,firmware_median5,24776,24776,100.00,413.61,0.6044,1.65,5.00,7.00,0,0,6.99,1.60,0.73,-62.0,-62.8,experiments/uwb-preamble-35-ch5_6m8_plen128_pac8-20260615.csv
+35,ch5_6m8_plen128_pac8,ok,firmware_smooth,24776,24776,100.00,413.61,0.6045,0.68,2.00,1.00,0,0,6.99,1.60,0.73,-62.0,-62.8,experiments/uwb-preamble-35-ch5_6m8_plen128_pac8-20260615.csv
+37,ch5_6m8_plen256_pac16,ok,raw,24685,24685,100.00,412.09,0.5915,3.86,12.00,18.00,1121,0,6.99,1.63,0.81,-61.8,-62.6,experiments/uwb-preamble-37-ch5_6m8_plen256_pac16-20260615.csv
+37,ch5_6m8_plen256_pac16,ok,firmware_median5,24685,24685,100.00,412.09,0.5916,2.38,8.00,10.00,0,0,6.99,1.63,0.81,-61.8,-62.6,experiments/uwb-preamble-37-ch5_6m8_plen256_pac16-20260615.csv
+37,ch5_6m8_plen256_pac16,ok,firmware_smooth,24685,24685,100.00,412.09,0.5925,1.00,3.00,1.00,0,0,6.99,1.63,0.81,-61.8,-62.6,experiments/uwb-preamble-37-ch5_6m8_plen256_pac16-20260615.csv
+38,ch5_6m8_plen512_pac32,ok,raw,3717,3717,100.00,62.08,0.5754,4.34,14.00,24.00,320,5,6.94,1.81,1.08,-60.0,-61.1,experiments/uwb-preamble-38-ch5_6m8_plen512_pac32-20260615.csv
+38,ch5_6m8_plen512_pac32,ok,firmware_median5,3717,3717,100.00,62.08,0.5748,2.46,9.00,12.00,2,0,6.94,1.81,1.08,-60.0,-61.1,experiments/uwb-preamble-38-ch5_6m8_plen512_pac32-20260615.csv
+38,ch5_6m8_plen512_pac32,ok,firmware_smooth,3717,3717,100.00,62.08,0.5764,0.83,3.00,1.00,0,0,6.94,1.81,1.08,-60.0,-61.1,experiments/uwb-preamble-38-ch5_6m8_plen512_pac32-20260615.csv
+39,ch5_6m8_plen1024_pac32,no_samples_after_switch,raw,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,nan,nan,experiments/uwb-preamble-39-ch5_6m8_plen1024_pac32-20260615.csv
+39,ch5_6m8_plen1024_pac32,no_samples_after_switch,firmware_median5,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,nan,nan,experiments/uwb-preamble-39-ch5_6m8_plen1024_pac32-20260615.csv
+39,ch5_6m8_plen1024_pac32,no_samples_after_switch,firmware_smooth,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,nan,nan,experiments/uwb-preamble-39-ch5_6m8_plen1024_pac32-20260615.csv

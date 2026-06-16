@@ -47,6 +47,11 @@
 #define POLL_MSG_GYRO_X_IDX       23
 #define POLL_MSG_GYRO_Y_IDX       25
 #define POLL_MSG_GYRO_Z_IDX       27
+#define POLL_MSG_TX_POWER_LEVEL_IDX 29
+
+#define POLL_MSG_FIRE_NONE        0u
+#define POLL_MSG_FIRE_COUNTDOWN   1u
+#define POLL_MSG_FIRE_IMMEDIATE   2u
 
 #define RESP_MSG_CTRL_OPT_IDX   11
 #define RESP_MSG_CTRL_TOKEN_IDX 12
@@ -62,6 +67,8 @@
 #define RESP_MSG_GYRO_X_IDX       31
 #define RESP_MSG_GYRO_Y_IDX       33
 #define RESP_MSG_GYRO_Z_IDX       35
+#define RESP_MSG_LOAD_MV_IDX      37
+#define RESP_MSG_LOAD_CONNECTED_IDX 39
 
 #define RESP_FLAG_SWITCH_PENDING 0x01u
 #define RESP_FLAG_ACQ_PENDING    0x02u
@@ -89,7 +96,8 @@ static uint8_t tx_poll_msg[] = {
     0,                    /* [22] fire relay flag to responder */
     0, 0,                 /* [23-24] gyro X (int16 LE, raw LSB) */
     0, 0,                 /* [25-26] gyro Y */
-    0, 0                  /* [27-28] gyro Z */
+    0, 0,                 /* [27-28] gyro Z */
+    UWB_TX_POWER_LEVEL_DEFAULT /* [29] relative TX power level */
 };
 
 /* Response expected from responder */
@@ -152,9 +160,11 @@ static uint8_t pending_acq_period_ms = RNG_DELAY_MS;
 static uint8_t pending_acq_token = 0;
 static bool acq_request_armed = false;
 static uint8_t fire_request_frames_remaining = 0;
+static uint8_t fire_request_code = POLL_MSG_FIRE_NONE;
+static uint8_t current_tx_power_level = UWB_TX_POWER_LEVEL_DEFAULT;
 
 static const uwb_runtime_profile_t *active_profile = NULL;
-static char output_buf[288];
+static char output_buf[320];
 static char cmd_buf[96];
 
 /* -- Physical plausibility gate --
@@ -236,6 +246,18 @@ static uint8_t median_count = 0;
 static uint8_t median_head = 0;
 static bool smooth_has_baseline = false;
 static float smooth_distance_m = 0.0f;
+static float filtered_distance_m = 0.0f;
+
+static void reset_distance_filters(void)
+{
+    gate_has_baseline = false;
+    gate_consecutive_rejects = 0;
+    median_count = 0;
+    median_head = 0;
+    smooth_has_baseline = false;
+    smooth_distance_m = 0.0f;
+    filtered_distance_m = 0.0f;
+}
 
 static float median_filter_push(float distance_m)
 {
@@ -430,7 +452,8 @@ static void write_distance_csv(uint32_t ms, uint32_t sample, float distance_m,
                                const int16_t responder_accel[3],
                                const gyro_data_t *initiator_gyro,
                                const int16_t responder_gyro[3],
-                               bool valid, float distance_filt_m, float distance_smooth_m)
+                               bool valid, float distance_filt_m, float distance_smooth_m,
+                               uint16_t responder_load_mv, uint8_t responder_load_connected)
 {
     char *dst = output_buf;
     float distance_cm_f = distance_m * 100.0f;
@@ -503,9 +526,20 @@ static void write_distance_csv(uint32_t ms, uint32_t sample, float distance_m,
         int32_t smooth_cm = (int32_t)(smooth_cm_f + ((smooth_cm_f >= 0.0f) ? 0.5f : -0.5f));
         dst = append_distance_cm(dst, smooth_cm);
     }
+    *dst++ = ',';
+    dst = append_u32(dst, responder_load_mv);
+    *dst++ = ',';
+    dst = append_u32(dst, responder_load_connected ? 1u : 0u);
     *dst = '\0';
 
     uart_log_write(output_buf);
+}
+
+static void apply_tx_power_config(void)
+{
+    dwt_txconfig_t tx_config = (config_options.chan == 9) ? txconfig_options_ch9 : txconfig_options;
+    tx_config.power = uwb_tx_power_value_for_level((uint8_t)config_options.chan, current_tx_power_level);
+    dwt_configuretxrf(&tx_config);
 }
 
 static int apply_profile_option(uint8_t opt)
@@ -525,14 +559,7 @@ static int apply_profile_option(uint8_t opt)
     }
     radio_quality_enable_diagnostics();
 
-    if (config_options.chan == 5)
-    {
-        dwt_configuretxrf(&txconfig_options);
-    }
-    else
-    {
-        dwt_configuretxrf(&txconfig_options_ch9);
-    }
+    apply_tx_power_config();
 
     dwt_setrxantennadelay(RX_ANT_DLY);
     dwt_settxantennadelay(TX_ANT_DLY);
@@ -565,6 +592,33 @@ static void handle_app_command(const char *cmd)
     if (strcmp(cmd, "CFG,GET_PROFILE") == 0)
     {
         snprintf(output_buf, sizeof(output_buf), "PROFILE,%u", (unsigned int)current_profile_opt);
+        uart_log_write(output_buf);
+        return;
+    }
+
+    if (strcmp(cmd, "CFG,GET_TXPWR") == 0)
+    {
+        snprintf(output_buf, sizeof(output_buf), "TXPWR,%u,0x%08lx",
+                 (unsigned int)current_tx_power_level,
+                 (unsigned long)uwb_tx_power_value_for_level((uint8_t)config_options.chan, current_tx_power_level));
+        uart_log_write(output_buf);
+        return;
+    }
+
+    if (strncmp(cmd, "CFG,TXPWR,", 10) == 0)
+    {
+        uint8_t level = (uint8_t)strtoul(cmd + 10, NULL, 10);
+        if (!uwb_tx_power_level_is_supported(level))
+        {
+            uart_log_write("ERR,UNSUPPORTED_TXPWR");
+            return;
+        }
+        current_tx_power_level = level;
+        apply_tx_power_config();
+        reset_distance_filters();
+        snprintf(output_buf, sizeof(output_buf), "ACK,TXPWR,%u,0x%08lx",
+                 (unsigned int)current_tx_power_level,
+                 (unsigned long)uwb_tx_power_value_for_level((uint8_t)config_options.chan, current_tx_power_level));
         uart_log_write(output_buf);
         return;
     }
@@ -641,7 +695,16 @@ static void handle_app_command(const char *cmd)
     if ((strcmp(cmd, "PYRO,FIRE") == 0) || (strcmp(cmd, "FIRE") == 0))
     {
         fire_request_frames_remaining = 200u;
+        fire_request_code = POLL_MSG_FIRE_COUNTDOWN;
         uart_log_write("ACK,PYRO_FORWARD_ARMED");
+        return;
+    }
+
+    if ((strcmp(cmd, "PYRO,FIRE_NOW") == 0) || (strcmp(cmd, "FIRE_NOW") == 0))
+    {
+        fire_request_frames_remaining = 200u;
+        fire_request_code = POLL_MSG_FIRE_IMMEDIATE;
+        uart_log_write("ACK,PYRO_FORWARD_NOW_ARMED");
         return;
     }
 
@@ -692,15 +755,7 @@ int ss_twr_initiator_custom(void)
     }
     radio_quality_enable_diagnostics();
 
-    /* Configure TX power based on channel */
-    if (config_options.chan == 5)
-    {
-        dwt_configuretxrf(&txconfig_options);
-    }
-    else
-    {
-        dwt_configuretxrf(&txconfig_options_ch9);
-    }
+    apply_tx_power_config();
 
     /* -- 3. Antenna delay -- */
     dwt_setrxantennadelay(RX_ANT_DLY);
@@ -731,7 +786,7 @@ int ss_twr_initiator_custom(void)
 
     /* CSV header on UART */
     test_run_info((unsigned char *)"# sample,distance_m,poll_tx,resp_rx,final_tx");
-    uart_log_write("# ms,sample,dist,rx_power,fp_power,clock_ppm,score,nlos,peak_fp,fp_conf,sts,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz,valid,dist_filt,dist_smooth");
+    uart_log_write("# ms,sample,dist,rx_power,fp_power,clock_ppm,score,nlos,peak_fp,fp_conf,sts,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz,valid,dist_filt,dist_smooth,rload_mv,rload_connected");
 
     NRF_RTC2->PRESCALER = 0;
     NRF_RTC2->TASKS_START = 1;
@@ -801,16 +856,21 @@ int ss_twr_initiator_custom(void)
         tx_poll_msg[POLL_MSG_ACQ_TOKEN_IDX] = acq_request_armed ? pending_acq_token : 0u;
         tx_poll_msg[POLL_MSG_TEST_PROFILE_IDX] = active_test_profile;
         tx_poll_msg[POLL_MSG_RANGING_MODE_IDX] = RANGING_MODE_SS_TWR;
-        tx_poll_msg[POLL_MSG_FIRE_IDX] = (fire_request_frames_remaining > 0u) ? 1u : 0u;
+        tx_poll_msg[POLL_MSG_FIRE_IDX] = (fire_request_frames_remaining > 0u) ? fire_request_code : POLL_MSG_FIRE_NONE;
         tx_poll_msg[POLL_MSG_GYRO_X_IDX]      = (uint8_t)(gyro_data.x & 0xFF);
         tx_poll_msg[POLL_MSG_GYRO_X_IDX + 1]  = (uint8_t)((gyro_data.x >> 8) & 0xFF);
         tx_poll_msg[POLL_MSG_GYRO_Y_IDX]      = (uint8_t)(gyro_data.y & 0xFF);
         tx_poll_msg[POLL_MSG_GYRO_Y_IDX + 1]  = (uint8_t)((gyro_data.y >> 8) & 0xFF);
         tx_poll_msg[POLL_MSG_GYRO_Z_IDX]      = (uint8_t)(gyro_data.z & 0xFF);
         tx_poll_msg[POLL_MSG_GYRO_Z_IDX + 1]  = (uint8_t)((gyro_data.z >> 8) & 0xFF);
+        tx_poll_msg[POLL_MSG_TX_POWER_LEVEL_IDX] = current_tx_power_level;
         if (fire_request_frames_remaining > 0u)
         {
             fire_request_frames_remaining--;
+            if (fire_request_frames_remaining == 0u)
+            {
+                fire_request_code = POLL_MSG_FIRE_NONE;
+            }
         }
 
         /* === TX POLL === */
@@ -918,6 +978,8 @@ int ss_twr_initiator_custom(void)
                         uint32_t ms;
                         int16_t responder_accel[3] = { 0, 0, 0 };
                         int16_t responder_gyro[3] = { 0, 0, 0 };
+                        uint16_t responder_load_mv = 0u;
+                        uint8_t responder_load_connected = 0u;
 
                         ranging_msg_get_ts(&rx_buffer[RESP_MSG_SS_POLL_RX_TS_IDX], &responder_poll_rx_ts);
                         ranging_msg_get_ts(&rx_buffer[RESP_MSG_SS_RESP_TX_TS_IDX], &responder_resp_tx_ts);
@@ -940,6 +1002,12 @@ int ss_twr_initiator_custom(void)
                             responder_gyro[2] = (int16_t)(rx_buffer[RESP_MSG_GYRO_Z_IDX] |
                                                  (rx_buffer[RESP_MSG_GYRO_Z_IDX + 1] << 8));
                         }
+                        if (frame_len > RESP_MSG_LOAD_CONNECTED_IDX)
+                        {
+                            responder_load_mv = (uint16_t)(rx_buffer[RESP_MSG_LOAD_MV_IDX] |
+                                                (rx_buffer[RESP_MSG_LOAD_MV_IDX + 1] << 8));
+                            responder_load_connected = rx_buffer[RESP_MSG_LOAD_CONNECTED_IDX] ? 1u : 0u;
+                        }
                         rtd_init = resp_rx_ts_32 - poll_tx_ts_32;
                         reply_resp = responder_resp_tx_ts - responder_poll_rx_ts;
                         clock_offset_ratio = (float)dwt_readclockoffset() * (float)CLOCK_OFFSET_PPM_TO_RATIO;
@@ -953,7 +1021,6 @@ int ss_twr_initiator_custom(void)
                         {
                             radio_quality_t radio_quality;
                             bool valid;
-                            static float last_filt = 0.0f;
                             float dist_filt;
                             float dist_smooth;
 
@@ -962,14 +1029,15 @@ int ss_twr_initiator_custom(void)
 
                             if (valid)
                             {
-                                last_filt = median_filter_push(distance);
+                                filtered_distance_m = median_filter_push(distance);
                             }
-                            dist_filt = last_filt;
+                            dist_filt = filtered_distance_m;
                             dist_smooth = smooth_filter_push(dist_filt, valid);
 
                             write_distance_csv(ms, ranging_count, distance, &radio_quality,
                                                &accel_data, responder_accel, &gyro_data, responder_gyro,
-                                               valid, dist_filt, dist_smooth);
+                                               valid, dist_filt, dist_smooth,
+                                               responder_load_mv, responder_load_connected);
                         }
 
                         if (switch_request_armed && (pending_switch_token != 0u) && (tx_poll_msg[POLL_MSG_SWITCH_TOKEN_IDX] == pending_switch_token))
@@ -978,6 +1046,7 @@ int ss_twr_initiator_custom(void)
                             {
                                 current_profile_opt = pending_profile_opt;
                                 switch_request_armed = false;
+                                reset_distance_filters();
                                 test_run_info((unsigned char *)"UWB CHANNEL SWITCHED");
                             }
                         }
@@ -1020,6 +1089,7 @@ int ss_twr_initiator_custom(void)
                         {
                             current_profile_opt = pending_profile_opt;
                             switch_request_armed = false;
+                            reset_distance_filters();
                             test_run_info((unsigned char *)"UWB RATE SWITCHED");
                         }
                     }

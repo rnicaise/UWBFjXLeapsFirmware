@@ -1,0 +1,10 @@
+opt,name,state,signal,samples,valid,valid_pct,hz,mean_m,std_cm,span95_cm,max_jump_cm,jumps_gt_10cm,jumps_gt_20cm,nlos_mean,peak_fp_mean,rx_fp_gap_mean,path
+35,ch5_6m8_plen128,no_samples_after_switch,raw,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-35-ch5_6m8_plen128-20260615-v2.csv
+35,ch5_6m8_plen128,no_samples_after_switch,firmware_median5,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-35-ch5_6m8_plen128-20260615-v2.csv
+35,ch5_6m8_plen128,no_samples_after_switch,firmware_smooth,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-35-ch5_6m8_plen128-20260615-v2.csv
+36,ch9_6m8_plen128,no_samples_after_switch,raw,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-36-ch9_6m8_plen128-20260615-v2.csv
+36,ch9_6m8_plen128,no_samples_after_switch,firmware_median5,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-36-ch9_6m8_plen128-20260615-v2.csv
+36,ch9_6m8_plen128,no_samples_after_switch,firmware_smooth,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-36-ch9_6m8_plen128-20260615-v2.csv
+40,ch5_850k_plen1024,no_samples_after_switch,raw,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-40-ch5_850k_plen1024-20260615-v2.csv
+40,ch5_850k_plen1024,no_samples_after_switch,firmware_median5,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-40-ch5_850k_plen1024-20260615-v2.csv
+40,ch5_850k_plen1024,no_samples_after_switch,firmware_smooth,0,0,0.00,0.00,nan,nan,nan,nan,0,0,nan,nan,nan,experiments/uwb-rf-40-ch5_850k_plen1024-20260615-v2.csv

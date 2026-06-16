@@ -13,8 +13,15 @@
 
 #define UWB_PROFILE_OPT_6M8_STABLE_CH5 35u
 #define UWB_PROFILE_OPT_6M8_STABLE_CH9 36u
+#define UWB_PROFILE_OPT_6M8_PLEN256_CH5 37u
+#define UWB_PROFILE_OPT_6M8_PLEN512_CH5 38u
+#define UWB_PROFILE_OPT_6M8_PLEN1024_CH5 39u
 #define UWB_PROFILE_OPT_6M8_STABLE     UWB_PROFILE_OPT_6M8_STABLE_CH5
 #define UWB_PROFILE_OPT_850K_ROBUST    40u
+
+#define UWB_TX_POWER_LEVEL_MIN     0u
+#define UWB_TX_POWER_LEVEL_DEFAULT 4u
+#define UWB_TX_POWER_LEVEL_MAX     4u
 
 typedef struct
 {
@@ -38,5 +45,7 @@ const uwb_runtime_profile_t *uwb_profile_find(uint8_t opt);
 uint8_t uwb_profile_opt_for_rate_kbps(int rate_kbps);
 uint8_t uwb_profile_opt_for_channel_rate_kbps(uint8_t channel, int rate_kbps);
 uint8_t uwb_profile_channel_for_opt(uint8_t opt);
+int uwb_tx_power_level_is_supported(uint8_t level);
+uint32_t uwb_tx_power_value_for_level(uint8_t channel, uint8_t level);
 
 #endif /* UWB_PROFILES_H */

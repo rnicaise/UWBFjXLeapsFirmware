@@ -77,6 +77,14 @@ class UwbViewModel(app: Application) : AndroidViewModel(app) {
         sendServiceAction(UwbForegroundService.ACTION_FIRE)
     }
 
+    fun armDistance2m() {
+        sendServiceAction(UwbForegroundService.ACTION_ARM_DISTANCE_2M)
+    }
+
+    fun armTilt50deg() {
+        sendServiceAction(UwbForegroundService.ACTION_ARM_TILT_50_DEG)
+    }
+
     fun updateGreenMax(value: Float) {
         viewModelScope.launch {
             settingsStore.updateGreenMax(value)

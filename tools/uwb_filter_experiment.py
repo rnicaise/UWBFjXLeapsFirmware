@@ -82,8 +82,20 @@ def parse_sample(line: str) -> Sample | None:
     parts = line.split(",")
     if len(parts) < 29:
         return None
+    if len(parts) > 30:
+        return None
 
     try:
+        resp_acq_ms = int(parts[17])
+        init_acq_ms = int(parts[18])
+        resp_profile_opt = int(parts[19])
+        init_profile_opt = int(parts[20])
+        if parts[27] not in ("0", "1"):
+            return None
+        if not ((1 <= resp_acq_ms <= 200) and (1 <= init_acq_ms <= 200)):
+            return None
+        if not ((35 <= resp_profile_opt <= 40) and (35 <= init_profile_opt <= 40)):
+            return None
         return Sample(
             ms=int(parts[0]),
             sample=int(parts[1]),

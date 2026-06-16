@@ -32,6 +32,9 @@ data class CsvSample(
     val initiatorProfileOpt: Int? = null,
     val firmwareValid: Boolean? = null,
     val firmwareDistFilt: Float? = null,
+    val firmwareDistSmooth: Float? = null,
+    val receiverLoadMv: Int? = null,
+    val receiverLoadConnected: Boolean? = null,
 )
 
 enum class LinkState {
@@ -44,6 +47,12 @@ enum class ConnectedUwbRole {
     UNKNOWN,
     INITIATOR,
     RESPONDER,
+}
+
+enum class SafetyArmMode {
+    DISARMED,
+    DISTANCE_2M,
+    TILT_50_DEG,
 }
 
 data class SessionQuality(
@@ -91,6 +100,8 @@ data class RuntimeState(
     val recordingName: String? = null,
     val lastSavedUri: Uri? = null,
     val invalidLines: Long = 0,
+    val safetyArmMode: SafetyArmMode = SafetyArmMode.DISARMED,
+    val safetyArmStatus: String = "Disarmed",
     val sessionQuality: SessionQuality = SessionQuality(),
     val transmissionQuality: TransmissionQuality = TransmissionQuality(),
 )

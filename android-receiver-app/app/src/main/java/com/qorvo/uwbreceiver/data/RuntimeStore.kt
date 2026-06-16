@@ -78,6 +78,16 @@ object RuntimeStore {
     }
 
     @Synchronized
+    fun setSafetyArmState(mode: SafetyArmMode, status: String) {
+        val current = _state.value
+        _state.value = current.copy(
+            safetyArmMode = mode,
+            safetyArmStatus = status,
+            status = status,
+        )
+    }
+
+    @Synchronized
     fun onSample(sample: CsvSample, displayDist: Float, phoneTelemetry: PhoneTelemetry) {
         val now = SystemClock.elapsedRealtime()
         val current = _state.value

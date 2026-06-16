@@ -194,6 +194,18 @@ Too high:
 
 TX power must stay within regulatory and Qorvo configuration constraints.
 
+The 2026-06-15 firmware sweep uses relative TX power register levels, not calibrated dBm values:
+
+| Level | TX_POWER register |
+| ---: | --- |
+| 0 | `0x7f7f7f7f` |
+| 1 | `0x9f9f9f9f` |
+| 2 | `0xbfbfbfbf` |
+| 3 | `0xdfdfdfdf` |
+| 4 | `0xfdfdfdfd` |
+
+Level 4 is the previous/current Qorvo CH5 default used by this project. Treat lower levels as experimental bench settings until regulatory and product constraints are reviewed.
+
 ### First Path
 
 The first path is the earliest arriving radio path. Ideally it is the direct antenna-to-antenna path.
@@ -336,6 +348,89 @@ Interpretation:
 - CH5 had very small RX-FP gap and low peak-to-FP, yet the distance was more stable here. The radio metrics remain context-dependent and should be evaluated together with temporal stability.
 - Profile 40 did not produce samples after the switch in this runtime setup. It should be treated as unsupported until the 850K responder/initiator timing path is debugged with a dedicated firmware session.
 - `dist_smooth` removed visible jumps in both working RF profiles, but it cannot fix broader RF-regime variance: CH9 remained wider even after smoothing.
+
+## Preamble Sweep From Best CH5 Setup
+
+Capture date: 2026-06-15.
+
+This sweep kept the best RF family from the previous experiment constant and varied only the preamble/PAC pair:
+
+- Channel: CH5.
+- Data rate: 6.8 Mbps.
+- STS: off.
+- Variable: preamble length and matching PAC.
+
+New runtime profiles added for this sweep:
+
+- Opt 37: CH5 / 6M8 / PLEN256 / PAC16.
+- Opt 38: CH5 / 6M8 / PLEN512 / PAC32.
+- Opt 39: CH5 / 6M8 / PLEN1024 / PAC32.
+
+Clean capture files:
+
+- `experiments/uwb-preamble-35-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-preamble-37-ch5_6m8_plen256_pac16-20260615.csv`
+- `experiments/uwb-preamble-38-ch5_6m8_plen512_pac32-20260615.csv`
+- `experiments/uwb-preamble-sweep-20260615-summary.csv`
+
+Summary table:
+
+| Opt | Profile | State | Signal | Samples | Valid % | Hz | Mean m | Std cm | Span95 cm | Max jump cm | >10 cm | >20 cm | NLOS mean | Peak/FP mean | RX-FP gap dB |
+| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 35 | CH5 / 6M8 / PLEN128 / PAC8 | ok | raw | 24,776 | 100.0 | 413.6 | 0.6051 | 2.94 | 9.00 | 17.00 | 345 | 0 | 6.99 | 1.60 | 0.73 |
+| 35 | CH5 / 6M8 / PLEN128 / PAC8 | ok | `dist_filt` | 24,776 | 100.0 | 413.6 | 0.6044 | 1.65 | 5.00 | 7.00 | 0 | 0 | 6.99 | 1.60 | 0.73 |
+| 35 | CH5 / 6M8 / PLEN128 / PAC8 | ok | `dist_smooth` | 24,776 | 100.0 | 413.6 | 0.6045 | 0.68 | 2.00 | 1.00 | 0 | 0 | 6.99 | 1.60 | 0.73 |
+| 37 | CH5 / 6M8 / PLEN256 / PAC16 | ok | raw | 24,685 | 100.0 | 412.1 | 0.5915 | 3.86 | 12.00 | 18.00 | 1,121 | 0 | 6.99 | 1.63 | 0.81 |
+| 37 | CH5 / 6M8 / PLEN256 / PAC16 | ok | `dist_filt` | 24,685 | 100.0 | 412.1 | 0.5916 | 2.38 | 8.00 | 10.00 | 0 | 0 | 6.99 | 1.63 | 0.81 |
+| 37 | CH5 / 6M8 / PLEN256 / PAC16 | ok | `dist_smooth` | 24,685 | 100.0 | 412.1 | 0.5925 | 1.00 | 3.00 | 1.00 | 0 | 0 | 6.99 | 1.63 | 0.81 |
+| 38 | CH5 / 6M8 / PLEN512 / PAC32 | ok | raw | 3,717 | 100.0 | 62.1 | 0.5754 | 4.34 | 14.00 | 24.00 | 320 | 5 | 6.94 | 1.81 | 1.08 |
+| 38 | CH5 / 6M8 / PLEN512 / PAC32 | ok | `dist_filt` | 3,717 | 100.0 | 62.1 | 0.5748 | 2.46 | 9.00 | 12.00 | 2 | 0 | 6.94 | 1.81 | 1.08 |
+| 38 | CH5 / 6M8 / PLEN512 / PAC32 | ok | `dist_smooth` | 3,717 | 100.0 | 62.1 | 0.5764 | 0.83 | 3.00 | 1.00 | 0 | 0 | 6.94 | 1.81 | 1.08 |
+| 39 | CH5 / 6M8 / PLEN1024 / PAC32 | no samples after switch | raw | 0 | 0.0 | 0.0 | n/a | n/a | n/a | n/a | 0 | 0 | n/a | n/a | n/a |
+
+Interpretation:
+
+- PLEN128/PAC8 remains the best profile in this placement: highest rate and best `dist_smooth` stability, about 0.68 cm std and 2 cm span95.
+- PLEN256/PAC16 kept the same high rate, but worsened stability: `dist_smooth` std 1.00 cm and span95 3 cm. It is still usable, but not better than baseline here.
+- PLEN512/PAC32 was functional, but the effective rate fell to about 62 Hz and raw stability got worse. It is not attractive for the high-rate use case unless a later timing tuning recovers Hz.
+- PLEN1024/PAC32 produced no samples after the runtime switch. Like the 850K profile, it needs dedicated timing/debug work before it can be evaluated fairly.
+- In this bench geometry, a longer preamble did not improve first-path stability. The next more interesting RF knob is likely TX power or STS, but TX power should be tested carefully at short range because it can strengthen reflections as well as the direct path.
+
+## TX Power Sweep From CH5 Baseline
+
+Firmware support added on 2026-06-15:
+
+- Initiator command: `CFG,GET_TXPWR` returns the active relative level and register value.
+- Initiator command: `CFG,TXPWR,<0..4>` applies the level locally and advertises it in the Poll frame.
+- Responder follows the level announced by the initiator Poll frame before transmitting its Response.
+- Distance filters are reset on TX power/profile changes so `dist_filt` and `dist_smooth` are not contaminated by the previous plateau.
+
+Confirmed sweep files:
+
+- `experiments/uwb-txpower-l0-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-l1-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-l2-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-l3-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-l4-ch5_6m8_plen128_pac8-20260615.csv`
+- `experiments/uwb-txpower-sweep-20260615-summary.csv`
+
+Result at the current placement, CH5 / 6M8 / PLEN128 / PAC8, about 30 s per level:
+
+| Level | Register | Hz | Raw std | Raw span95 | Raw >10 cm | Smooth std | Smooth span95 | Smooth max jump | RX dBm | FP dBm |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | `0x7f7f7f7f` | 386.1 | 2.44 cm | 7 cm | 39 | 0.70 cm | 2 cm | 1 cm | -68.3 | -70.6 |
+| 1 | `0x9f9f9f9f` | 386.1 | 2.92 cm | 9 cm | 97 | 1.47 cm | 3 cm | 1 cm | -67.4 | -69.2 |
+| 2 | `0xbfbfbfbf` | 386.0 | 2.84 cm | 9 cm | 133 | 0.90 cm | 3 cm | 1 cm | -65.9 | -67.7 |
+| 3 | `0xdfdfdfdf` | 386.1 | 3.51 cm | 11 cm | 172 | 1.48 cm | 4 cm | 1 cm | -65.0 | -66.6 |
+| 4 | `0xfdfdfdfd` | 385.8 | 2.86 cm | 10 cm | 44 | 1.19 cm | 3 cm | 2 cm | -76.0 | -79.8 |
+
+Interpretation:
+
+- Lower TX power did not cost update rate in this bench setup.
+- Level 0 was the cleanest static setting in this capture: lowest raw std/span95 and lowest `dist_smooth` std/span95.
+- Level 3 was worst here, with the most raw jumps and the largest raw span.
+- Default level 4 was not the best for short-range static precision in this placement.
+- Because the measured mean distance shifts between levels, repeat at 50 cm and 1 m with fixed orientation before using this as a product default.
 
 For each profile, compare:
 

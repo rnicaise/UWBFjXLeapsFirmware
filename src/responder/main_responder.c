@@ -31,6 +31,10 @@
 #define POLL_MSG_GYRO_X_IDX       23
 #define POLL_MSG_GYRO_Y_IDX       25
 #define POLL_MSG_GYRO_Z_IDX       27
+#define POLL_MSG_TX_POWER_LEVEL_IDX 29
+
+#define POLL_MSG_FIRE_COUNTDOWN   1u
+#define POLL_MSG_FIRE_IMMEDIATE   2u
 
 #define RESP_MSG_CTRL_OPT_IDX         11
 #define RESP_MSG_CTRL_TOKEN_IDX       12
@@ -46,6 +50,10 @@
 #define RESP_MSG_GYRO_X_IDX           31
 #define RESP_MSG_GYRO_Y_IDX           33
 #define RESP_MSG_GYRO_Z_IDX           35
+#define RESP_MSG_LOAD_MV_IDX          37
+#define RESP_MSG_LOAD_CONNECTED_IDX   39
+
+#define LOAD_SENSE_THRESHOLD_MV       1000u
 
 #define RESP_FLAG_SWITCH_PENDING 0x01u
 #define RESP_FLAG_ACQ_PENDING    0x02u
@@ -65,10 +73,11 @@ static uint8_t rx_poll_msg[] = {
     0, 0,
     0, 0,
     0, 0,
-    0, 0
+    0, 0,
+    0
 };
 
-static uint8_t tx_resp_msg[RESP_MSG_GYRO_Z_IDX + 2u] = {
+static uint8_t tx_resp_msg[RESP_MSG_LOAD_CONNECTED_IDX + 1u] = {
     0x41, 0x88,
     0,
     0xCA, 0xDE,
@@ -81,7 +90,9 @@ static uint8_t tx_resp_msg[RESP_MSG_GYRO_Z_IDX + 2u] = {
     0, 0, 0, 0,
     0, 0,
     0, 0,
-    0, 0
+    0, 0,
+    0, 0,
+    0
 };
 
 static uint8_t rx_final_msg[] = {
@@ -132,7 +143,11 @@ static uint8_t last_initiator_acq_period_ms = RNG_DELAY_MS;
 static uint8_t last_initiator_profile_opt = UWB_PROFILE_OPT_6M8_STABLE;
 static uint8_t current_test_profile = UWB_TEST_PROFILE_DEFAULT;
 static uint8_t last_initiator_test_profile = UWB_TEST_PROFILE_DEFAULT;
+static uint8_t current_tx_power_level = UWB_TX_POWER_LEVEL_DEFAULT;
 static uint32_t responder_accel_sample_count = 0;
+static int16_t load_saadc_sample = 0;
+static uint16_t load_p0_28_mv = 0;
+static uint8_t load_connected = 0;
 
 static const uwb_runtime_profile_t *active_profile = NULL;
 
@@ -169,6 +184,78 @@ extern dwt_txconfig_t txconfig_options_ch9;
 extern void test_run_info(unsigned char *data);
 
 static void handle_app_command(const char *cmd);
+
+static void load_sense_init(void)
+{
+    NRF_SAADC->ENABLE = SAADC_ENABLE_ENABLE_Enabled;
+    NRF_SAADC->RESOLUTION = SAADC_RESOLUTION_VAL_10bit;
+    NRF_SAADC->OVERSAMPLE = SAADC_OVERSAMPLE_OVERSAMPLE_Bypass;
+    NRF_SAADC->CH[0].PSELP = SAADC_CH_PSELP_PSELP_AnalogInput4;
+    NRF_SAADC->CH[0].PSELN = SAADC_CH_PSELN_PSELN_NC;
+    NRF_SAADC->CH[0].CONFIG = (SAADC_CH_CONFIG_RESP_Bypass << SAADC_CH_CONFIG_RESP_Pos)
+                            | (SAADC_CH_CONFIG_RESN_Bypass << SAADC_CH_CONFIG_RESN_Pos)
+                            | (SAADC_CH_CONFIG_GAIN_Gain1_6 << SAADC_CH_CONFIG_GAIN_Pos)
+                            | (SAADC_CH_CONFIG_REFSEL_Internal << SAADC_CH_CONFIG_REFSEL_Pos)
+                            | (SAADC_CH_CONFIG_TACQ_10us << SAADC_CH_CONFIG_TACQ_Pos)
+                            | (SAADC_CH_CONFIG_MODE_SE << SAADC_CH_CONFIG_MODE_Pos)
+                            | (SAADC_CH_CONFIG_BURST_Disabled << SAADC_CH_CONFIG_BURST_Pos);
+}
+
+static bool load_sense_sample(uint16_t *mv)
+{
+    uint32_t guard;
+    int32_t raw;
+
+    NRF_SAADC->RESULT.PTR = (uint32_t)&load_saadc_sample;
+    NRF_SAADC->RESULT.MAXCNT = 1u;
+    NRF_SAADC->EVENTS_STARTED = 0u;
+    NRF_SAADC->EVENTS_END = 0u;
+    NRF_SAADC->TASKS_START = 1u;
+
+    guard = 10000u;
+    while ((NRF_SAADC->EVENTS_STARTED == 0u) && (guard-- > 0u))
+    {
+    }
+    if (NRF_SAADC->EVENTS_STARTED == 0u)
+    {
+        return false;
+    }
+
+    NRF_SAADC->TASKS_SAMPLE = 1u;
+    guard = 10000u;
+    while ((NRF_SAADC->EVENTS_END == 0u) && (guard-- > 0u))
+    {
+    }
+    NRF_SAADC->TASKS_STOP = 1u;
+    if (NRF_SAADC->EVENTS_END == 0u)
+    {
+        return false;
+    }
+
+    raw = load_saadc_sample;
+    if (raw < 0)
+    {
+        raw = 0;
+    }
+    if (raw > 1023)
+    {
+        raw = 1023;
+    }
+
+    *mv = (uint16_t)(((uint32_t)raw * 3600u + 511u) / 1023u);
+    return true;
+}
+
+static void load_sense_update(void)
+{
+    uint16_t mv;
+
+    if (load_sense_sample(&mv))
+    {
+        load_p0_28_mv = mv;
+        load_connected = (mv >= LOAD_SENSE_THRESHOLD_MV) ? 1u : 0u;
+    }
+}
 
 #if defined(UWB_ACCEL_TARGET_GENA)
 static void pyro_leds_set(bool on)
@@ -256,6 +343,24 @@ static void pyro_request_fire(const char *ack)
 
     pyro_fire_requested = true;
     uart_log_write(ack);
+}
+
+static void pyro_fire_now(const char *ack)
+{
+    if (pyro_state != PYRO_STATE_IDLE || pyro_fire_requested)
+    {
+        uart_log_write("ERR,PYRO_BUSY");
+        return;
+    }
+
+    pyro_fire_requested = false;
+    pyro_state = PYRO_STATE_FIRE;
+    pyro_state_start_tick = NRF_RTC2->COUNTER;
+    pyro_leds_set(true);
+    nrf_gpio_pin_set(PYRO_TRIGGER_PIN);
+    pyro_buzzer_tone(1568u, 80u);
+    uart_log_write(ack);
+    uart_log_write("PYRO,FIRE_NOW");
 }
 
 static void pyro_trigger_process(void)
@@ -369,13 +474,10 @@ static int apply_profile_option(uint8_t opt)
     }
     dwt_configciadiag((uint8_t)DW_CIA_DIAG_LOG_OFF);
 
-    if (config_options.chan == 5)
     {
-        dwt_configuretxrf(&txconfig_options);
-    }
-    else
-    {
-        dwt_configuretxrf(&txconfig_options_ch9);
+        dwt_txconfig_t tx_config = (config_options.chan == 9) ? txconfig_options_ch9 : txconfig_options;
+        tx_config.power = uwb_tx_power_value_for_level((uint8_t)config_options.chan, current_tx_power_level);
+        dwt_configuretxrf(&tx_config);
     }
 
     dwt_setrxantennadelay(RX_ANT_DLY);
@@ -408,6 +510,16 @@ static void handle_app_command(const char *cmd)
     {
 #if defined(UWB_ACCEL_TARGET_GENA)
         pyro_request_fire("ACK,PYRO_ARMED");
+#else
+        uart_log_write("ERR,PYRO_UNAVAILABLE");
+#endif
+        return;
+    }
+
+    if ((strcmp(cmd, "PYRO,FIRE_NOW") == 0) || (strcmp(cmd, "FIRE_NOW") == 0))
+    {
+#if defined(UWB_ACCEL_TARGET_GENA)
+        pyro_fire_now("ACK,PYRO_FIRE_NOW");
 #else
         uart_log_write("ERR,PYRO_UNAVAILABLE");
 #endif
@@ -456,13 +568,10 @@ int ss_twr_responder_custom(void)
     }
     dwt_configciadiag((uint8_t)DW_CIA_DIAG_LOG_OFF);
 
-    if (config_options.chan == 5)
     {
-        dwt_configuretxrf(&txconfig_options);
-    }
-    else
-    {
-        dwt_configuretxrf(&txconfig_options_ch9);
+        dwt_txconfig_t tx_config = (config_options.chan == 9) ? txconfig_options_ch9 : txconfig_options;
+        tx_config.power = uwb_tx_power_value_for_level((uint8_t)config_options.chan, current_tx_power_level);
+        dwt_configuretxrf(&tx_config);
     }
 
     dwt_setrxantennadelay(RX_ANT_DLY);
@@ -482,14 +591,17 @@ int ss_twr_responder_custom(void)
         test_run_info((unsigned char *)"ACCEL FAIL");
     }
 
+    load_sense_init();
+    load_sense_update();
+
     NRF_RTC2->PRESCALER = 0;
     NRF_RTC2->TASKS_START = 1;
 #if defined(UWB_ACCEL_TARGET_GENA)
     pyro_trigger_init();
 #endif
 
-    test_run_info((unsigned char *)"# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz");
-    uart_log_write("# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz");
+    test_run_info((unsigned char *)"# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz,rload_mv,rload_connected");
+    uart_log_write("# ms,sample,dist,iax,iay,iaz,rax,ray,raz,resp_acq_ms,init_acq_ms,resp_profile_opt,init_profile_opt,igx,igy,igz,rgx,rgy,rgz,rload_mv,rload_connected");
 
     while (1)
     {
@@ -562,12 +674,31 @@ int ss_twr_responder_custom(void)
                 {
                     last_initiator_test_profile = rx_buffer[POLL_MSG_TEST_PROFILE_IDX];
                 }
+                if (frame_len > POLL_MSG_TX_POWER_LEVEL_IDX)
+                {
+                    uint8_t requested_tx_power_level = rx_buffer[POLL_MSG_TX_POWER_LEVEL_IDX];
+                    if (uwb_tx_power_level_is_supported(requested_tx_power_level) && (requested_tx_power_level != current_tx_power_level))
+                    {
+                        dwt_txconfig_t tx_config;
+                        current_tx_power_level = requested_tx_power_level;
+                        tx_config = (config_options.chan == 9) ? txconfig_options_ch9 : txconfig_options;
+                        tx_config.power = uwb_tx_power_value_for_level((uint8_t)config_options.chan, current_tx_power_level);
+                        dwt_configuretxrf(&tx_config);
+                    }
+                }
 #if defined(UWB_ACCEL_TARGET_GENA)
                 if ((frame_len > POLL_MSG_FIRE_IDX) && (rx_buffer[POLL_MSG_FIRE_IDX] != 0u))
                 {
                     if ((pyro_state == PYRO_STATE_IDLE) && !pyro_fire_requested)
                     {
-                        pyro_request_fire("ACK,PYRO_REMOTE_ARMED");
+                        if (rx_buffer[POLL_MSG_FIRE_IDX] == POLL_MSG_FIRE_IMMEDIATE)
+                        {
+                            pyro_fire_now("ACK,PYRO_REMOTE_FIRE_NOW");
+                        }
+                        else if (rx_buffer[POLL_MSG_FIRE_IDX] == POLL_MSG_FIRE_COUNTDOWN)
+                        {
+                            pyro_request_fire("ACK,PYRO_REMOTE_ARMED");
+                        }
                     }
                 }
 #endif
@@ -645,6 +776,9 @@ int ss_twr_responder_custom(void)
                 tx_resp_msg[RESP_MSG_GYRO_Y_IDX + 1] = (uint8_t)((gyro_local.y >> 8) & 0xFF);
                 tx_resp_msg[RESP_MSG_GYRO_Z_IDX] = (uint8_t)(gyro_local.z & 0xFF);
                 tx_resp_msg[RESP_MSG_GYRO_Z_IDX + 1] = (uint8_t)((gyro_local.z >> 8) & 0xFF);
+                tx_resp_msg[RESP_MSG_LOAD_MV_IDX] = (uint8_t)(load_p0_28_mv & 0xFF);
+                tx_resp_msg[RESP_MSG_LOAD_MV_IDX + 1] = (uint8_t)((load_p0_28_mv >> 8) & 0xFF);
+                tx_resp_msg[RESP_MSG_LOAD_CONNECTED_IDX] = load_connected;
                 dwt_writetxdata(sizeof(tx_resp_msg), tx_resp_msg, 0);
                 dwt_writetxfctrl(sizeof(tx_resp_msg) + FCS_LEN, 0, 1);
 
@@ -658,6 +792,7 @@ int ss_twr_responder_custom(void)
                 waitforsysstatus(NULL, NULL, DWT_INT_TXFRS_BIT_MASK, 0);
                 dwt_writesysstatuslo(DWT_INT_TXFRS_BIT_MASK);
                 frame_seq_nb++;
+                load_sense_update();
 
                 if (accel_ok && !accel_read(&accel_local))
                 {
@@ -760,7 +895,7 @@ int ss_twr_responder_custom(void)
                             radio_quality_read(&radio_quality);
 
                             snprintf(output_buf, sizeof(output_buf),
-                            "%lu,%lu,%.2f,%.1f,%.1f,%.2f,%u,%u,%.2f,%u,%d,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%d,%d,%d,%d,%d,%d",
+                            "%lu,%lu,%.2f,%.1f,%.1f,%.2f,%u,%u,%.2f,%u,%d,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u",
                             (unsigned long)ms,
                             (unsigned long)ranging_count,
                             distance,
@@ -787,7 +922,9 @@ int ss_twr_responder_custom(void)
                             (int)gyro_rx[2],
                             (int)gyro_local.x,
                             (int)gyro_local.y,
-                            (int)gyro_local.z);
+                            (int)gyro_local.z,
+                            (unsigned int)load_p0_28_mv,
+                            (unsigned int)load_connected);
                         }
                         uart_log_write(output_buf);
 

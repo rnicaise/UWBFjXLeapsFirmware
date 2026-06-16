@@ -1,0 +1,16 @@
+level,tx_power,state,signal,samples,valid,valid_pct,hz,mean_m,std_cm,span95_cm,max_jump_cm,jumps_gt_10cm,jumps_gt_20cm,nlos_mean,peak_fp_mean,rx_fp_gap_mean,rx_power_mean,fp_power_mean,path
+0,0x7f7f7f7f,ok,raw,12338,12338,100.00,386.11,0.8517,2.44,7.00,15.00,39,0,7.00,1.62,2.37,-68.3,-70.6,experiments/uwb-txpower-l0-ch5_6m8_plen128_pac8-20260615.csv
+0,0x7f7f7f7f,ok,firmware_median5,12338,12338,100.00,386.11,0.8509,1.40,4.00,7.00,0,0,7.00,1.62,2.37,-68.3,-70.6,experiments/uwb-txpower-l0-ch5_6m8_plen128_pac8-20260615.csv
+0,0x7f7f7f7f,ok,firmware_smooth,12338,12338,100.00,386.11,0.8541,0.70,2.00,1.00,0,0,7.00,1.62,2.37,-68.3,-70.6,experiments/uwb-txpower-l0-ch5_6m8_plen128_pac8-20260615.csv
+1,0x9f9f9f9f,ok,raw,12337,12337,100.00,386.13,0.8423,2.92,9.00,15.00,97,0,6.94,1.76,1.84,-67.4,-69.2,experiments/uwb-txpower-l1-ch5_6m8_plen128_pac8-20260615.csv
+1,0x9f9f9f9f,ok,firmware_median5,12337,12337,100.00,386.13,0.8416,1.88,5.00,7.00,0,0,6.94,1.76,1.84,-67.4,-69.2,experiments/uwb-txpower-l1-ch5_6m8_plen128_pac8-20260615.csv
+1,0x9f9f9f9f,ok,firmware_smooth,12337,12337,100.00,386.13,0.8440,1.47,3.00,1.00,0,0,6.94,1.76,1.84,-67.4,-69.2,experiments/uwb-txpower-l1-ch5_6m8_plen128_pac8-20260615.csv
+2,0xbfbfbfbf,ok,raw,12335,12335,100.00,386.03,0.8331,2.84,9.00,17.00,133,0,6.98,1.72,1.85,-65.9,-67.7,experiments/uwb-txpower-l2-ch5_6m8_plen128_pac8-20260615.csv
+2,0xbfbfbfbf,ok,firmware_median5,12335,12335,100.00,386.03,0.8326,1.42,5.00,8.00,0,0,6.98,1.72,1.85,-65.9,-67.7,experiments/uwb-txpower-l2-ch5_6m8_plen128_pac8-20260615.csv
+2,0xbfbfbfbf,ok,firmware_smooth,12335,12335,100.00,386.03,0.8334,0.90,3.00,1.00,0,0,6.98,1.72,1.85,-65.9,-67.7,experiments/uwb-txpower-l2-ch5_6m8_plen128_pac8-20260615.csv
+3,0xdfdfdfdf,ok,raw,12337,12337,100.00,386.09,0.8240,3.51,11.00,21.00,172,2,6.95,1.78,1.65,-65.0,-66.6,experiments/uwb-txpower-l3-ch5_6m8_plen128_pac8-20260615.csv
+3,0xdfdfdfdf,ok,firmware_median5,12337,12337,100.00,386.09,0.8233,2.39,7.00,12.00,2,0,6.95,1.78,1.65,-65.0,-66.6,experiments/uwb-txpower-l3-ch5_6m8_plen128_pac8-20260615.csv
+3,0xdfdfdfdf,ok,firmware_smooth,12337,12337,100.00,386.09,0.8221,1.48,4.00,1.00,0,0,6.95,1.78,1.65,-65.0,-66.6,experiments/uwb-txpower-l3-ch5_6m8_plen128_pac8-20260615.csv
+4,0xfdfdfdfd,ok,raw,12326,12326,100.00,385.75,0.7655,2.86,10.00,13.00,44,0,6.80,1.79,3.84,-76.0,-79.8,experiments/uwb-txpower-l4-ch5_6m8_plen128_pac8-20260615.csv
+4,0xfdfdfdfd,ok,firmware_median5,12326,12326,100.00,385.75,0.7642,1.82,6.00,7.00,0,0,6.80,1.79,3.84,-76.0,-79.8,experiments/uwb-txpower-l4-ch5_6m8_plen128_pac8-20260615.csv
+4,0xfdfdfdfd,ok,firmware_smooth,12326,12326,100.00,385.75,0.7640,1.19,3.00,2.00,0,0,6.80,1.79,3.84,-76.0,-79.8,experiments/uwb-txpower-l4-ch5_6m8_plen128_pac8-20260615.csv

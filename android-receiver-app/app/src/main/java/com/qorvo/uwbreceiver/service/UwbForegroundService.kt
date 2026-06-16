@@ -39,6 +39,7 @@ import com.qorvo.uwbreceiver.data.LinkState
 import com.qorvo.uwbreceiver.data.PhoneTelemetry
 import com.qorvo.uwbreceiver.data.RecordingManager
 import com.qorvo.uwbreceiver.data.RuntimeStore
+import com.qorvo.uwbreceiver.data.SafetyArmMode
 import com.qorvo.uwbreceiver.data.SettingsStore
 import com.qorvo.uwbreceiver.data.UwbControlSettings
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +55,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import java.io.IOException
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.sqrt
 
 class UwbForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -76,8 +80,8 @@ class UwbForegroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var toneGenerator: ToneGenerator? = null
-    private var alertJob: Job? = null
-    private var distanceAlertActive = false
+    private var safetyArmMode = SafetyArmMode.DISARMED
+    private var tiltBaseline: TiltAngles? = null
 
     private var medianWindow = 1
     private var currentExperiment = ExperimentSettings()
@@ -189,7 +193,7 @@ class UwbForegroundService : Service() {
             ACTION_DISCONNECT -> {
                 shouldConnect = false
                 stopRecordingInternal()
-                stopDistanceAlert()
+                disarmSafetyTrigger("Disconnected")
                 closePort()
                 RuntimeStore.setLinkState(LinkState.DISCONNECTED, "Disconnected")
                 stopSelf()
@@ -199,13 +203,16 @@ class UwbForegroundService : Service() {
             ACTION_STOP_RECORDING -> stopRecordingInternal()
             ACTION_FIRE -> {
                 serviceScope.launch {
-                    val sent = sendCommandSlowly("PYRO,FIRE\n")
+                    val sent = firePyro("Manual FIRE", immediate = false)
                     RuntimeStore.setLinkState(
                         RuntimeStore.state.value.linkState,
-                        if (sent) "FIRE command sent" else "FIRE send failed",
+                        if (sent) "Manual FIRE command sent" else "Manual FIRE send failed",
                     )
                 }
             }
+
+            ACTION_ARM_DISTANCE_2M -> armDistanceTrigger()
+            ACTION_ARM_TILT_50_DEG -> armTiltTrigger()
         }
 
         return START_STICKY
@@ -214,7 +221,7 @@ class UwbForegroundService : Service() {
     override fun onDestroy() {
         shouldConnect = false
         stopRecordingInternal()
-        stopDistanceAlert()
+        disarmSafetyTrigger("Service stopped")
         closePort()
 
         connectJob?.cancel()
@@ -396,12 +403,8 @@ class UwbForegroundService : Service() {
         lastAcceptedSample = sample
         consecutivePlausibilityRejects = 0
 
-        /* Prefer the firmware median-of-5 distance when present: spikes are
-         * already removed at the source with ~13 ms latency. The app median
-         * window (if > 1) is applied on top. */
-        val baseDist = sample.firmwareDistFilt ?: sample.dist
-        val filtered = filterDistance(baseDist, sample.firmwareValid != false)
-        updateDistanceAlert(filtered)
+        val filtered = filterDistance(sample.dist)
+        updateSafetyTrigger(sample, filtered)
         val phoneTelemetry = snapshotPhoneTelemetry()
 
         /* At ~390 Hz the per-sample stats/state pipeline (synchronized state
@@ -424,13 +427,8 @@ class UwbForegroundService : Service() {
         )
     }
 
-    private fun filterDistance(rawDistance: Float, firmwareValid: Boolean = true): Float {
-        /* Samples flagged invalid by the firmware physical gate do not enter the
-         * display window: the last known-good median keeps being shown. Raw values
-         * are still recorded to CSV for analysis. */
-        if (firmwareValid) {
-            distWindow.addLast(rawDistance)
-        }
+    private fun filterDistance(rawDistance: Float): Float {
+        distWindow.addLast(rawDistance)
         while (distWindow.size > medianWindow.coerceAtLeast(1)) {
             distWindow.removeFirst()
         }
@@ -543,7 +541,7 @@ class UwbForegroundService : Service() {
     private fun closePort() {
         readJob?.cancel()
         readJob = null
-        stopDistanceAlert()
+        disarmSafetyTrigger("USB closed")
 
         try {
             activePort?.close()
@@ -554,38 +552,97 @@ class UwbForegroundService : Service() {
         connectedRole = ConnectedUwbRole.UNKNOWN
     }
 
-    private fun updateDistanceAlert(filteredDistanceM: Float) {
-        if (filteredDistanceM > DISTANCE_ALERT_THRESHOLD_M) {
-            startDistanceAlert()
-        } else {
-            stopDistanceAlert()
-        }
+    private fun armDistanceTrigger() {
+        safetyArmMode = SafetyArmMode.DISTANCE_2M
+        tiltBaseline = null
+        RuntimeStore.setSafetyArmState(SafetyArmMode.DISTANCE_2M, "Armed: distance >= 2.00 m")
+        toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, ARM_BEEP_DURATION_MS)
     }
 
-    private fun startDistanceAlert() {
-        if (distanceAlertActive) {
+    private fun armTiltTrigger() {
+        val sample = lastAcceptedSample ?: RuntimeStore.state.value.latest
+        val baseline = sample?.let { initiatorTiltAngles(it) }
+        if (baseline == null) {
+            RuntimeStore.setSafetyArmState(SafetyArmMode.DISARMED, "Tilt arm failed: no initiator accel")
             return
         }
 
-        distanceAlertActive = true
-        alertJob?.cancel()
-        alertJob = serviceScope.launch {
-            while (isActive && distanceAlertActive) {
-                toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, ALERT_BEEP_DURATION_MS)
-                delay(ALERT_BEEP_PERIOD_MS.toLong())
+        safetyArmMode = SafetyArmMode.TILT_50_DEG
+        tiltBaseline = baseline
+        RuntimeStore.setSafetyArmState(SafetyArmMode.TILT_50_DEG, "Armed: initiator pitch/roll delta >= 50°")
+        toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, ARM_BEEP_DURATION_MS)
+    }
+
+    private fun updateSafetyTrigger(sample: CsvSample, filteredDistanceM: Float) {
+        when (safetyArmMode) {
+            SafetyArmMode.DISARMED -> return
+            SafetyArmMode.DISTANCE_2M -> {
+                if (filteredDistanceM >= DISTANCE_TRIGGER_THRESHOLD_M) {
+                    triggerAndDisarm("distance ${String.format("%.2f", filteredDistanceM)} m")
+                }
+            }
+            SafetyArmMode.TILT_50_DEG -> {
+                val baseline = tiltBaseline ?: return
+                val current = initiatorTiltAngles(sample) ?: return
+                val pitchDelta = abs(current.pitchDeg - baseline.pitchDeg)
+                val rollDelta = abs(current.rollDeg - baseline.rollDeg)
+                if (pitchDelta >= TILT_TRIGGER_THRESHOLD_DEG || rollDelta >= TILT_TRIGGER_THRESHOLD_DEG) {
+                    triggerAndDisarm("tilt pitch ${String.format("%.1f", pitchDelta)}° roll ${String.format("%.1f", rollDelta)}°")
+                }
             }
         }
     }
 
-    private fun stopDistanceAlert() {
-        if (!distanceAlertActive && alertJob == null) {
+    private fun triggerAndDisarm(reason: String) {
+        val triggeredMode = safetyArmMode
+        if (triggeredMode == SafetyArmMode.DISARMED) {
             return
         }
 
-        distanceAlertActive = false
-        alertJob?.cancel()
-        alertJob = null
+        safetyArmMode = SafetyArmMode.DISARMED
+        tiltBaseline = null
+        RuntimeStore.setSafetyArmState(SafetyArmMode.DISARMED, "Triggered ${safetyArmLabel(triggeredMode)}: $reason")
+        serviceScope.launch {
+            val sent = firePyro("Triggered ${safetyArmLabel(triggeredMode)}", immediate = true)
+            RuntimeStore.setSafetyArmState(
+                SafetyArmMode.DISARMED,
+                if (sent) "Triggered ${safetyArmLabel(triggeredMode)}: FIRE sent" else "Triggered ${safetyArmLabel(triggeredMode)}: FIRE send failed",
+            )
+        }
+    }
+
+    private fun disarmSafetyTrigger(status: String) {
+        safetyArmMode = SafetyArmMode.DISARMED
+        tiltBaseline = null
         toneGenerator?.stopTone()
+        RuntimeStore.setSafetyArmState(SafetyArmMode.DISARMED, status)
+    }
+
+    private suspend fun firePyro(reason: String, immediate: Boolean): Boolean {
+        toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, TRIGGER_BEEP_DURATION_MS)
+        RuntimeStore.setSafetyArmState(SafetyArmMode.DISARMED, "$reason: sending ${if (immediate) "FIRE_NOW" else "FIRE"}")
+        return sendCommandSlowly(if (immediate) "PYRO,FIRE_NOW\n" else "PYRO,FIRE\n")
+    }
+
+    private fun initiatorTiltAngles(sample: CsvSample): TiltAngles? {
+        val x = sample.iax.toFloat()
+        val y = sample.iay.toFloat()
+        val z = sample.iaz.toFloat()
+        val norm = sqrt((x * x) + (y * y) + (z * z))
+        if (!norm.isFinite() || norm < MIN_ACCEL_NORM_RAW) {
+            return null
+        }
+        val pitch = atan2(x, sqrt((y * y) + (z * z))) * RAD_TO_DEG
+        val roll = atan2(y, sqrt((x * x) + (z * z))) * RAD_TO_DEG
+        return TiltAngles(pitch, roll)
+    }
+
+    private fun safetyArmLabel(mode: SafetyArmMode): String {
+        return when (mode) {
+            SafetyArmMode.DISARMED -> "disarmed"
+            SafetyArmMode.DISTANCE_2M -> "distance-armed-2m"
+            SafetyArmMode.TILT_50_DEG -> "tilt-armed-50°"
+        }
     }
 
     private fun startRecordingInternal() {
@@ -710,9 +767,12 @@ class UwbForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "uwb-acquisition"
         private const val NOTIF_ID = 42
-        private const val DISTANCE_ALERT_THRESHOLD_M = 1.0f
-        private const val ALERT_BEEP_DURATION_MS = 250
-        private const val ALERT_BEEP_PERIOD_MS = 300
+        private const val DISTANCE_TRIGGER_THRESHOLD_M = 2.0f
+        private const val TILT_TRIGGER_THRESHOLD_DEG = 50.0f
+        private const val MIN_ACCEL_NORM_RAW = 100.0f
+        private const val ARM_BEEP_DURATION_MS = 120
+        private const val TRIGGER_BEEP_DURATION_MS = 500
+        private const val RAD_TO_DEG = 57.29578f
         private const val SERIAL_BAUD_RATE = 460800
         private const val MAX_ACCUMULATED_SERIAL_CHARS = 65536
         private const val UI_PUSH_INTERVAL_MS = 50L
@@ -724,7 +784,14 @@ class UwbForegroundService : Service() {
         const val ACTION_START_RECORDING = "com.qorvo.uwbreceiver.action.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.qorvo.uwbreceiver.action.STOP_RECORDING"
         const val ACTION_FIRE = "com.qorvo.uwbreceiver.action.FIRE"
+        const val ACTION_ARM_DISTANCE_2M = "com.qorvo.uwbreceiver.action.ARM_DISTANCE_2M"
+        const val ACTION_ARM_TILT_50_DEG = "com.qorvo.uwbreceiver.action.ARM_TILT_50_DEG"
 
         private const val ACTION_USB_PERMISSION = "com.qorvo.uwbreceiver.action.USB_PERMISSION"
     }
+
+    private data class TiltAngles(
+        val pitchDeg: Float,
+        val rollDeg: Float,
+    )
 }

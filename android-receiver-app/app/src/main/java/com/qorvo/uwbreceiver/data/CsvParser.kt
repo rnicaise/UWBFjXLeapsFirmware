@@ -28,6 +28,14 @@ object CsvParser {
                 !hasRadioMetrics && parts.size >= controlsStart + 6 -> controlsStart
                 else -> null
             }
+            val hasFirmwareDistance = gyroStart?.let { parts.size >= it + 9 } == true
+            val loadStart = gyroStart?.let {
+                when {
+                    hasFirmwareDistance && parts.size >= it + 11 -> it + 9
+                    !hasFirmwareDistance && parts.size >= it + 8 -> it + 6
+                    else -> null
+                }
+            }
 
             CsvSample(
                 ms = parts[0].toLong(),
@@ -57,8 +65,11 @@ object CsvParser {
                 initiatorAcquisitionPeriodMs = if (hasRadioMetrics) parts.getOrNull(controlsStart + 1)?.toIntOrNull() else null,
                 responderProfileOpt = if (hasRadioMetrics) parts.getOrNull(controlsStart + 2)?.toIntOrNull() else null,
                 initiatorProfileOpt = if (hasRadioMetrics) parts.getOrNull(controlsStart + 3)?.toIntOrNull() else null,
-                firmwareValid = gyroStart?.let { parts.getOrNull(it + 6)?.toIntOrNull() }?.let { it != 0 },
-                firmwareDistFilt = gyroStart?.let { parts.getOrNull(it + 7)?.toFloatOrNull()?.takeIf { f -> f.isFinite() } },
+                firmwareValid = if (hasFirmwareDistance) gyroStart?.let { parts.getOrNull(it + 6)?.toIntOrNull() }?.let { it != 0 } else null,
+                firmwareDistFilt = if (hasFirmwareDistance) gyroStart?.let { parts.getOrNull(it + 7)?.toFloatOrNull()?.takeIf { f -> f.isFinite() } } else null,
+                firmwareDistSmooth = if (hasFirmwareDistance) gyroStart?.let { parts.getOrNull(it + 8)?.toFloatOrNull()?.takeIf { f -> f.isFinite() } } else null,
+                receiverLoadMv = loadStart?.let { parts.getOrNull(it)?.toIntOrNull() },
+                receiverLoadConnected = loadStart?.let { parts.getOrNull(it + 1)?.toIntOrNull() }?.let { it != 0 },
             )
         } catch (_: NumberFormatException) {
             null

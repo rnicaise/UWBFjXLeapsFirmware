@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.qorvo.uwbreceiver.data.ConnectedUwbRole
 import com.qorvo.uwbreceiver.data.CsvSample
 import com.qorvo.uwbreceiver.data.LinkState
+import com.qorvo.uwbreceiver.data.SafetyArmMode
 import com.qorvo.uwbreceiver.data.SignalQualityCalculator
 import com.qorvo.uwbreceiver.data.UwbUiState
 import com.qorvo.uwbreceiver.ui.theme.GreenGood
@@ -43,6 +44,8 @@ fun UwbMainScreen(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onFire: () -> Unit,
+    onArmDistance2m: () -> Unit,
+    onArmTilt50deg: () -> Unit,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onShare: () -> Unit,
@@ -165,9 +168,19 @@ fun UwbMainScreen(
 
         item {
             CardBlock {
+                Text("Receiver load", fontWeight = FontWeight.Bold)
+                StatRow("P0.28", formatLoadVoltage(sample))
+                StatRow("Charge", formatLoadConnected(sample))
+            }
+        }
+
+        item {
+            CardBlock {
                 Text("Session", fontWeight = FontWeight.Bold)
                 StatRow("Connection", state.runtime.linkState.name)
                 StatRow("Status", state.runtime.status)
+                StatRow("Armed trigger", safetyArmModeLabel(state.runtime.safetyArmMode))
+                StatRow("Armed status", state.runtime.safetyArmStatus)
                 StatRow("Connected role", state.runtime.connectedRole.name)
                 StatRow("Mode", "SS-TWR")
                 StatRow("RF profile", "Channel 5 / 6.8 Mbps")
@@ -242,6 +255,16 @@ fun UwbMainScreen(
                 ) {
                     Text("FIRE")
                 }
+                Button(
+                    onClick = onArmDistance2m,
+                    enabled = state.runtime.linkState == LinkState.CONNECTED,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("distance-armed-2m") }
+                Button(
+                    onClick = onArmTilt50deg,
+                    enabled = state.runtime.linkState == LinkState.CONNECTED && sample != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("tilt-armed-50°") }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = onStartRecording,
@@ -364,6 +387,16 @@ private fun GyroTripleValues(sample: CsvSample?, initiator: Boolean) {
     }
 }
 
+private fun formatLoadVoltage(sample: CsvSample?): String = sample?.receiverLoadMv?.let {
+    String.format("%.2f V", it / 1000f)
+} ?: "--"
+
+private fun formatLoadConnected(sample: CsvSample?): String = when (sample?.receiverLoadConnected) {
+    true -> "CONNECTED"
+    false -> "DISCONNECTED"
+    null -> "--"
+}
+
 @Composable
 private fun SignalCategoryTile(title: String, score: Float?, detail: String, modifier: Modifier = Modifier) {
     Column(
@@ -443,6 +476,14 @@ private fun formatPeakGap(value: Float?): String {
 
 private fun formatPpm(value: Float?): String {
     return value?.let { String.format("%.2f ppm", it) } ?: "--"
+}
+
+private fun safetyArmModeLabel(mode: SafetyArmMode): String {
+    return when (mode) {
+        SafetyArmMode.DISARMED -> "Disarmed"
+        SafetyArmMode.DISTANCE_2M -> "distance-armed-2m"
+        SafetyArmMode.TILT_50_DEG -> "tilt-armed-50°"
+    }
 }
 
 private fun formatScoreWithDetail(score: Float?, detail: String): String {
