@@ -1,16 +1,22 @@
 package com.qorvo.uwbreceiver.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,6 +27,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,6 +41,7 @@ import com.qorvo.uwbreceiver.data.LinkState
 import com.qorvo.uwbreceiver.data.SafetyArmMode
 import com.qorvo.uwbreceiver.data.SignalQualityCalculator
 import com.qorvo.uwbreceiver.data.UwbUiState
+import com.qorvo.uwbreceiver.ui.theme.Accent
 import com.qorvo.uwbreceiver.ui.theme.GreenGood
 import com.qorvo.uwbreceiver.ui.theme.OrangeWarn
 import com.qorvo.uwbreceiver.ui.theme.RedAlert
@@ -37,7 +49,7 @@ import com.qorvo.uwbreceiver.ui.theme.SurfaceCard
 import com.qorvo.uwbreceiver.ui.theme.SurfaceCardAlt
 import com.qorvo.uwbreceiver.ui.theme.TextSecondary
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun UwbMainScreen(
     state: UwbUiState,
@@ -92,6 +104,7 @@ fun UwbMainScreen(
                 text = "std(5s): ${state.runtime.std5s?.let { String.format("%.3f m", it) } ?: "--"} | std(30s): ${state.runtime.std30s?.let { String.format("%.3f m", it) } ?: "--"}",
                 color = TextSecondary,
             )
+            StatusBadges(state)
         }
 
         item {
@@ -246,25 +259,24 @@ fun UwbMainScreen(
                     Button(onClick = onConnect, modifier = Modifier.weight(1f)) { Text("Connect") }
                     Button(onClick = onDisconnect, modifier = Modifier.weight(1f)) { Text("Disconnect") }
                 }
-                Button(
+                FireButton(
                     onClick = onFire,
                     enabled = state.runtime.linkState == LinkState.CONNECTED &&
                         (state.runtime.connectedRole == ConnectedUwbRole.INITIATOR ||
                             state.runtime.connectedRole == ConnectedUwbRole.RESPONDER),
+                    armed = state.runtime.safetyArmMode != SafetyArmMode.DISARMED,
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("FIRE")
-                }
+                )
                 Button(
                     onClick = onArmDistance2m,
                     enabled = state.runtime.linkState == LinkState.CONNECTED,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("distance-armed-2m") }
+                ) { Text("Armer distance 2 m") }
                 Button(
                     onClick = onArmTilt50deg,
                     enabled = state.runtime.linkState == LinkState.CONNECTED && sample != null,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("tilt-armed-50°") }
+                ) { Text("Armer inclinaison 50°") }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = onStartRecording,
@@ -325,6 +337,112 @@ fun UwbMainScreen(
                 )
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StatusBadges(state: UwbUiState) {
+    val linkColor = when (state.runtime.linkState) {
+        LinkState.CONNECTED -> GreenGood
+        LinkState.CONNECTING -> OrangeWarn
+        LinkState.DISCONNECTED -> RedAlert
+    }
+    val roleColor = when (state.runtime.connectedRole) {
+        ConnectedUwbRole.INITIATOR -> Accent
+        ConnectedUwbRole.RESPONDER -> GreenGood
+        ConnectedUwbRole.UNKNOWN -> TextSecondary
+    }
+    val armedColor = when (state.runtime.safetyArmMode) {
+        SafetyArmMode.DISARMED -> TextSecondary
+        SafetyArmMode.DISTANCE_2M -> OrangeWarn
+        SafetyArmMode.TILT_50_DEG -> RedAlert
+    }
+
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        StateBadge("USB", state.runtime.linkState.name, linkColor)
+        StateBadge("Role", roleLabel(state.runtime.connectedRole), roleColor)
+        StateBadge("Rec", if (state.runtime.recording) "ON" else "OFF", if (state.runtime.recording) OrangeWarn else TextSecondary)
+        StateBadge("Arm", safetyArmModeLabel(state.runtime.safetyArmMode), armedColor)
+    }
+}
+
+@Composable
+private fun StateBadge(label: String, value: String, color: Color) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(color.copy(alpha = 0.16f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(value, color = color, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+    }
+}
+
+@Composable
+private fun FireButton(onClick: () -> Unit, enabled: Boolean, armed: Boolean, modifier: Modifier = Modifier) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.height(56.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (armed) RedAlert else OrangeWarn,
+            contentColor = Color.White,
+            disabledContainerColor = SurfaceCardAlt,
+            disabledContentColor = TextSecondary,
+        ),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DynamiteIcon(enabled = enabled)
+            Text(
+                text = if (armed) "FIRE - ARMED" else "FIRE",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DynamiteIcon(enabled: Boolean) {
+    val stickColor = if (enabled) Color(0xFFE5383B) else TextSecondary
+    val bandColor = if (enabled) Color(0xFFFFD166) else SurfaceCard
+    val fuseColor = if (enabled) Color(0xFFEAF0FF) else TextSecondary
+    val sparkColor = if (enabled) Color(0xFFFFF3B0) else TextSecondary
+
+    Canvas(modifier = Modifier.size(width = 32.dp, height = 24.dp)) {
+        val radius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+        val stickWidth = 19.dp.toPx()
+        val stickHeight = 6.dp.toPx()
+        val left = 2.dp.toPx()
+        val top = 6.dp.toPx()
+
+        drawRoundRect(stickColor, Offset(left, top), Size(stickWidth, stickHeight), radius)
+        drawRoundRect(stickColor.copy(alpha = 0.82f), Offset(left + 4.dp.toPx(), top + 5.dp.toPx()), Size(stickWidth, stickHeight), radius)
+        drawRoundRect(stickColor.copy(alpha = 0.7f), Offset(left + 1.dp.toPx(), top + 10.dp.toPx()), Size(stickWidth, stickHeight), radius)
+        drawRoundRect(bandColor, Offset(left + 8.dp.toPx(), top - 1.dp.toPx()), Size(4.dp.toPx(), 18.dp.toPx()), CornerRadius(2.dp.toPx(), 2.dp.toPx()))
+        drawLine(
+            color = fuseColor,
+            start = Offset(left + stickWidth, top + 3.dp.toPx()),
+            end = Offset(27.dp.toPx(), 3.dp.toPx()),
+            strokeWidth = 2.dp.toPx(),
+            cap = StrokeCap.Round,
+        )
+        drawLine(sparkColor, Offset(29.dp.toPx(), 1.dp.toPx()), Offset(31.dp.toPx(), 5.dp.toPx()), strokeWidth = 1.6.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(sparkColor, Offset(31.dp.toPx(), 2.dp.toPx()), Offset(27.dp.toPx(), 4.dp.toPx()), strokeWidth = 1.6.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(sparkColor, Offset(30.dp.toPx(), 6.dp.toPx()), Offset(32.dp.toPx(), 9.dp.toPx()), strokeWidth = 1.6.dp.toPx(), cap = StrokeCap.Round)
     }
 }
 
@@ -480,9 +598,17 @@ private fun formatPpm(value: Float?): String {
 
 private fun safetyArmModeLabel(mode: SafetyArmMode): String {
     return when (mode) {
-        SafetyArmMode.DISARMED -> "Disarmed"
-        SafetyArmMode.DISTANCE_2M -> "distance-armed-2m"
-        SafetyArmMode.TILT_50_DEG -> "tilt-armed-50°"
+        SafetyArmMode.DISARMED -> "DISARMED"
+        SafetyArmMode.DISTANCE_2M -> "DIST 2 M"
+        SafetyArmMode.TILT_50_DEG -> "TILT 50°"
+    }
+}
+
+private fun roleLabel(role: ConnectedUwbRole): String {
+    return when (role) {
+        ConnectedUwbRole.UNKNOWN -> "AUTO"
+        ConnectedUwbRole.INITIATOR -> "INIT"
+        ConnectedUwbRole.RESPONDER -> "RESP"
     }
 }
 
